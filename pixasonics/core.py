@@ -229,30 +229,29 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
-        with self.render_lock:
 
-            # Get probe matrix
-            probe_mat = self.renderer.get_probe_matrix()
+        # Get probe matrix
+        probe_mat = self.renderer.get_probe_matrix()
 
-            # Compute probe features
-            self.compute_features(probe_mat)
+        # Compute probe features
+        self.compute_features(probe_mat)
 
-            # Update mappings
-            self.compute_mappers()
+        # Update mappings
+        self.compute_mappers()
 
-            # call renderer draw
-            self.renderer.draw()
-            image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
-            
-            # Put the image to the canvas
-            img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-            img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-            self.canvas.put_image_data(img_data, self.padding, self.padding)
+        # call renderer draw
+        self.renderer.draw()
+        image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
+        
+        # Put the image to the canvas
+        img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
+        self.canvas.put_image_data(img_data, self.padding, self.padding)
 
-            # Put the probe to the canvas
-            probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-            probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-            self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+        # Put the probe to the canvas
+        probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+        self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
     # def mouse_callback(self, x, y, pressed: int = 0):
     #     """Handle mouse, compute probe features, update synth(s), and render kernels."""
@@ -298,23 +297,26 @@ class App():
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
 
         with hold_canvas(self.canvas):
-            self.canvas.clear()
-            self.canvas.fill_circle(x, y, 10)
 
-        # probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-        # # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        # x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
-        # y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
-        # self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
-        # self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
+            probe_w, probe_h = self.probe_state[0], self.probe_state[1]
+            # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+            x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
+            y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
+            self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
+            self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
 
-        # # Update mouse state
-        # if pressed == 2:
-        #     self.mouse_state[2] = 1
-        #     self.enable_dsp(True)
-        # elif pressed == 3:
-        #     self.mouse_state[2] = 0
-        #     self.enable_dsp(False)
+            # Update mouse state
+            if pressed == 2:
+                self.mouse_state[2] = 1
+                self.enable_dsp(True)
+            elif pressed == 3:
+                self.mouse_state[2] = 0
+                self.enable_dsp(False)
+
+            # self.canvas.clear()
+            # self.canvas.fill_circle(x, y, 10)
+
+            self.draw()
 
 
 
