@@ -9,6 +9,7 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 from .utils import samps2mix
+import threading
 
 
 class App():
@@ -41,6 +42,12 @@ class App():
             probe_state_buffer=self.probe_state,
             mouse_state_buffer=self.mouse_state
         )
+
+        # Threading
+        self.render_lock = threading.Lock()
+        self.render_thread = None
+        self.render_event = threading.Event()
+        self.render_event.set()
 
         self.create_gui()
         self.create_audio_graph()
@@ -172,15 +179,35 @@ class App():
 
     def load_image(self, image_path):
         self.renderer.load_image(image_path)
+        self.draw()
 
+
+    # def draw(self):
+    #     """Render new frames for all kernels, then update the HTML canvas with the results."""
+    #     if self.is_drawing:
+    #         return  # Skip if we're already drawing
+
+    #     self.is_drawing = True
+    #     try:
+    #         # call renderer draw
+    #         self.renderer.draw()
+    #         image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
+            
+    #         # Put the image to the canvas
+    #         img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+    #         img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
+    #         self.canvas.put_image_data(img_data, self.padding, self.padding)
+
+    #         # Put the probe to the canvas
+    #         probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+    #         probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+    #         self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+    #     finally:
+    #         self.is_drawing = False  # Reset drawing state
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
-        if self.is_drawing:
-            return  # Skip if we're already drawing
-
-        self.is_drawing = True
-        try:
+        with self.render_lock:
             # call renderer draw
             self.renderer.draw()
             image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
@@ -194,9 +221,6 @@ class App():
             probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
             probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
             self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
-        finally:
-            self.is_drawing = False  # Reset drawing state
-
 
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
@@ -216,25 +240,27 @@ class App():
             self.mouse_state[2] = 0
             self.enable_dsp(False)
         
-        # Drop excess events over the refresh interval
-        current_time = time.time()
-        if current_time - self.last_draw_time < self.refresh_interval and pressed < 2: # only skip if mouse is up
-            return  # Skip if we are processing too quickly
-        self.last_draw_time = current_time  # Update the last event time
+        # # Drop excess events over the refresh interval
+        # current_time = time.time()
+        # if current_time - self.last_draw_time < self.refresh_interval and pressed < 2: # only skip if mouse is up
+        #     return  # Skip if we are processing too quickly
+        # self.last_draw_time = current_time  # Update the last event time
 
         # Get probe matrix
         probe_mat = self.renderer.get_probe_matrix()
 
         # Compute probe features
-        # mean_pix(probe_mat)
         self.compute_features(probe_mat)
 
         # Update mappings
-        # pix2freq()
         self.compute_mappers()
+
+        if self.render_thread is None or not self.render_thread.is_alive():
+            self.render_thread = threading.Thread(target=self.draw)
+            self.render_thread.start()
         
         # Compute all kernels
-        self.draw()
+        # self.draw()
 
 
     # GUI callbacks
