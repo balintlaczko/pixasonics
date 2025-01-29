@@ -1,7 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp
 import taichi as ti
-from ipycanvas import Canvas, hold_canvas, MultiCanvas
+from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
 import ipywidgets as widgets
 import time
@@ -9,7 +9,6 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 from .utils import samps2mix
-import threading
 
 
 class App():
@@ -23,7 +22,7 @@ class App():
         
         self.image_size = image_size
         self.padding = padding
-        # self.refresh_interval = 1 / fps
+        self.refresh_interval = 1 / fps
 
         # Global state variables
         self.is_drawing = False
@@ -36,53 +35,12 @@ class App():
         self.mappers = []
         self.synths = []
 
-        # Create the Taichi renderer
-        self.renderer = Renderer(
-            image_size=self.image_size,
-            probe_state_buffer=self.probe_state,
-            mouse_state_buffer=self.mouse_state
-        )
-
         self.create_gui()
         self.create_audio_graph()
-
-        # Threading
-        self.render_lock = threading.Lock()
-        self.render_thread = None
-        self.render_event = threading.Event()
-        self.render_event.set()
-        self.running = True
-        self.fps = fps
-        self.last_draw_time = time.time()
-        self.refresh_interval = 1.0 / fps
-
-        # Start the rendering loop
-        self.render_thread = threading.Thread(target=self.render_loop)
-        # self.render_thread.start()
-
-        # Draw the initial frame
-        # self.draw()
-
-
-    def render_loop(self):
-        while self.running:
-            current_time = time.time()
-            if current_time - self.last_draw_time >= self.refresh_interval:
-                self.last_draw_time = current_time
-                self.draw()
-            time.sleep(0.001)  # Sleep briefly to avoid high CPU usage
-
-    def stop(self):
-        self.running = False
-        if self.render_thread is not None:
-            self.render_thread.join()
         
 
     def create_gui(self):
         # Create the canvas
-        # self.canvas = Canvas(
-        #     width=self.image_size[0]*2 + self.padding*2, 
-        #     height=self.image_size[1] + self.padding*2)
         self.canvas = MultiCanvas(
             2,
             width=self.image_size[0]*2 + self.padding*2, 
@@ -204,73 +162,19 @@ class App():
         
 
     def load_image(self, image_path):
-        # self.renderer.load_image(image_path)
-
         img = Image.open(image_path)
         img = img.resize(self.image_size)
-        img = np.array(img, dtype=np.float32) / 255
-        # self.bg.from_numpy(img)
-        self.bg_np = img
-
-        # self.draw()
+        self.bg_np = np.array(img, dtype=np.float32) / 255
 
         # Put the image to the canvas
         img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
         self.canvas[0].put_image_data(img_data, self.padding, self.padding)
 
 
-    # def draw(self):
-    #     """Render new frames for all kernels, then update the HTML canvas with the results."""
-    #     if self.is_drawing:
-    #         return  # Skip if we're already drawing
-
-    #     self.is_drawing = True
-    #     try:
-    #         # call renderer draw
-    #         self.renderer.draw()
-    #         image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
-            
-    #         # Put the image to the canvas
-    #         img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-    #         img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-    #         self.canvas.put_image_data(img_data, self.padding, self.padding)
-
-    #         # Put the probe to the canvas
-    #         probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-    #         probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-    #         self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
-    #     finally:
-    #         self.is_drawing = False  # Reset drawing state
-
-    # def draw(self):
-    #     """Render new frames for all kernels, then update the HTML canvas with the results."""
-
-    #     # Get probe matrix
-    #     probe_mat = self.renderer.get_probe_matrix()
-
-    #     # Compute probe features
-    #     self.compute_features(probe_mat)
-
-    #     # Update mappings
-    #     self.compute_mappers()
-
-    #     # call renderer draw
-    #     self.renderer.draw()
-    #     image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
-        
-    #     # Put the image to the canvas
-    #     img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-    #     img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-    #     self.canvas.put_image_data(img_data, self.padding, self.padding)
-
-    #     # Put the probe to the canvas
-    #     probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-    #     probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-    #     self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
-
     def get_probe_matrix(self):
         """Get the probe matrix from the background image."""
-        y, x = self.mouse_state[0], self.mouse_state[1]
+        x, y = self.mouse_state[0], self.mouse_state[1]
         probe_w, probe_h = self.probe_state[0], self.probe_state[1]
         x_from = max(x - probe_w//2, 0)
         y_from = max(y - probe_h//2, 0)
@@ -282,7 +186,6 @@ class App():
         """Render new frames for all kernels, then update the HTML canvas with the results."""
 
         # Get probe matrix
-        # probe_mat = self.renderer.get_probe_matrix()
         probe_mat = self.get_probe_matrix()
 
         # Compute probe features
@@ -291,21 +194,8 @@ class App():
         # Update mappings
         self.compute_mappers()
 
-        # # call renderer draw
-        # self.renderer.draw()
-        # image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
-
+        # Clear the canvas
         self.canvas[1].clear()
-        
-        # # Put the image to the canvas
-        # img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-        # self.canvas.put_image_data(img_data, self.padding, self.padding)
-        
-        # # Put the image to the canvas
-        # img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # # img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-        # self.canvas.put_image_data(img_data, self.padding, self.padding)
 
         # Put the probe rectangle to the canvas
         probe_w, probe_h = self.probe_state[0], self.probe_state[1]
@@ -316,57 +206,12 @@ class App():
             int(probe_y - probe_h//2 + self.padding), 
             int(probe_w), 
             int(probe_h))
-        # self.canvas.stroke_rect(50, 50, 50, 50)
-
-        # # Put the probe to the canvas
-        # probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-        # self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
         # Put the probe to the canvas
         probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+        probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
         self.canvas[1].put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
-    # def mouse_callback(self, x, y, pressed: int = 0):
-    #     """Handle mouse, compute probe features, update synth(s), and render kernels."""
-
-    #     probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-    #     # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-    #     x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
-    #     y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
-    #     self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
-    #     self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
-
-    #     # Update mouse state
-    #     if pressed == 2:
-    #         self.mouse_state[2] = 1
-    #         self.enable_dsp(True)
-    #     elif pressed == 3:
-    #         self.mouse_state[2] = 0
-    #         self.enable_dsp(False)
-        
-    #     # # Drop excess events over the refresh interval
-    #     # current_time = time.time()
-    #     # if current_time - self.last_draw_time < self.refresh_interval and pressed < 2: # only skip if mouse is up
-    #     #     return  # Skip if we are processing too quickly
-    #     # self.last_draw_time = current_time  # Update the last event time
-
-    #     # Get probe matrix
-    #     probe_mat = self.renderer.get_probe_matrix()
-
-    #     # Compute probe features
-    #     self.compute_features(probe_mat)
-
-    #     # Update mappings
-    #     self.compute_mappers()
-
-    #     if self.render_thread is None or not self.render_thread.is_alive():
-    #         self.render_thread = threading.Thread(target=self.draw)
-    #         self.render_thread.start()
-        
-    #     # Compute all kernels
-    #     # self.draw()
 
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
@@ -395,8 +240,6 @@ class App():
                 self.enable_dsp(False)
 
             self.draw()
-
-
 
 
     # GUI callbacks
@@ -464,22 +307,6 @@ class Renderer():
     def draw_kernel(self):
         self.draw_image()
         self.draw_probe()
-
-    # @property
-    # def get_mouse_state(self):
-    #     return self.mouse_state_buffer
-    
-    # @property
-    # def get_probe_state(self):
-    #     return self.probe_size_buffer
-    
-
-    # @ti.func
-    # def read_buffers(self):
-    #     print(type(self.get_mouse_state[0]))
-    #     for i in range(3):
-    #         self.mouse_state[i] = self.get_mouse_state[i]
-    #         self.probe_state[i] = self.get_probe_state[i]
 
     def read_buffers(self):
         self.mouse_state.from_numpy(self.mouse_state_buffer)
