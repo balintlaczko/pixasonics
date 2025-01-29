@@ -1,7 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp
 import taichi as ti
-from ipycanvas import Canvas
+from ipycanvas import Canvas, hold_canvas
 from IPython.display import display
 import ipywidgets as widgets
 import time
@@ -58,7 +58,7 @@ class App():
 
         # Start the rendering loop
         self.render_thread = threading.Thread(target=self.render_loop)
-        self.render_thread.start()
+        # self.render_thread.start()
 
         # Draw the initial frame
         # self.draw()
@@ -143,7 +143,7 @@ class App():
         display(self.mouse_y_text)
 
         # Mousing event listeners
-        self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, 1 if self.mouse_state[2] == 1 else 0))  # Triggered during mouse movement (keeps track of mouse button state)
+        self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
 
@@ -297,20 +297,24 @@ class App():
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
 
-        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-        # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
-        y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
-        self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
-        self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
+        with hold_canvas(self.canvas):
+            self.canvas.clear()
+            self.canvas.fill_circle(x, y, 10)
 
-        # Update mouse state
-        if pressed == 2:
-            self.mouse_state[2] = 1
-            self.enable_dsp(True)
-        elif pressed == 3:
-            self.mouse_state[2] = 0
-            self.enable_dsp(False)
+        # probe_w, probe_h = self.probe_state[0], self.probe_state[1]
+        # # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+        # x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
+        # y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
+        # self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
+        # self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
+
+        # # Update mouse state
+        # if pressed == 2:
+        #     self.mouse_state[2] = 1
+        #     self.enable_dsp(True)
+        # elif pressed == 3:
+        #     self.mouse_state[2] = 0
+        #     self.enable_dsp(False)
 
 
 
