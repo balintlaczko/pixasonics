@@ -270,7 +270,7 @@ class App():
 
     def get_probe_matrix(self):
         """Get the probe matrix from the background image."""
-        x, y = self.mouse_state[0], self.mouse_state[1]
+        y, x = self.mouse_state[0], self.mouse_state[1]
         probe_w, probe_h = self.probe_state[0], self.probe_state[1]
         x_from = max(x - probe_w//2, 0)
         y_from = max(y - probe_h//2, 0)
@@ -371,6 +371,12 @@ class App():
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
 
+        # Drop excess events over the refresh interval
+        current_time = time.time()
+        if current_time - self.last_draw_time < self.refresh_interval and pressed < 2: # only skip if mouse is up
+            return  # Skip if we are processing too quickly
+        self.last_draw_time = current_time  # Update the last event time
+
         with hold_canvas(self.canvas):
 
             probe_w, probe_h = self.probe_state[0], self.probe_state[1]
@@ -389,9 +395,6 @@ class App():
                 self.enable_dsp(False)
 
             self.draw()
-
-            # self.canvas.clear()
-            # self.canvas.fill_circle(x, y, 10)
 
 
 
