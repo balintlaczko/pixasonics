@@ -1,7 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp
 import taichi as ti
-from ipycanvas import Canvas, hold_canvas
+from ipycanvas import Canvas, hold_canvas, MultiCanvas
 from IPython.display import display
 import ipywidgets as widgets
 import time
@@ -80,7 +80,11 @@ class App():
 
     def create_gui(self):
         # Create the canvas
-        self.canvas = Canvas(
+        # self.canvas = Canvas(
+        #     width=self.image_size[0]*2 + self.padding*2, 
+        #     height=self.image_size[1] + self.padding*2)
+        self.canvas = MultiCanvas(
+            2,
             width=self.image_size[0]*2 + self.padding*2, 
             height=self.image_size[1] + self.padding*2)
         display(self.canvas)
@@ -200,8 +204,19 @@ class App():
         
 
     def load_image(self, image_path):
-        self.renderer.load_image(image_path)
-        self.draw()
+        # self.renderer.load_image(image_path)
+
+        img = Image.open(image_path)
+        img = img.resize(self.image_size)
+        img = np.array(img, dtype=np.float32) / 255
+        # self.bg.from_numpy(img)
+        self.bg_np = img
+
+        # self.draw()
+
+        # Put the image to the canvas
+        img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        self.canvas[0].put_image_data(img_data, self.padding, self.padding)
 
 
     # def draw(self):
@@ -227,11 +242,48 @@ class App():
     #     finally:
     #         self.is_drawing = False  # Reset drawing state
 
+    # def draw(self):
+    #     """Render new frames for all kernels, then update the HTML canvas with the results."""
+
+    #     # Get probe matrix
+    #     probe_mat = self.renderer.get_probe_matrix()
+
+    #     # Compute probe features
+    #     self.compute_features(probe_mat)
+
+    #     # Update mappings
+    #     self.compute_mappers()
+
+    #     # call renderer draw
+    #     self.renderer.draw()
+    #     image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
+        
+    #     # Put the image to the canvas
+    #     img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+    #     img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
+    #     self.canvas.put_image_data(img_data, self.padding, self.padding)
+
+    #     # Put the probe to the canvas
+    #     probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+    #     probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+    #     self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+
+    def get_probe_matrix(self):
+        """Get the probe matrix from the background image."""
+        x, y = self.mouse_state[0], self.mouse_state[1]
+        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
+        x_from = max(x - probe_w//2, 0)
+        y_from = max(y - probe_h//2, 0)
+        probe = self.bg_np[x_from : x_from + probe_w, y_from : y_from + probe_h]
+        return probe
+    
+
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
 
         # Get probe matrix
-        probe_mat = self.renderer.get_probe_matrix()
+        # probe_mat = self.renderer.get_probe_matrix()
+        probe_mat = self.get_probe_matrix()
 
         # Compute probe features
         self.compute_features(probe_mat)
@@ -239,19 +291,42 @@ class App():
         # Update mappings
         self.compute_mappers()
 
-        # call renderer draw
-        self.renderer.draw()
-        image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
+        # # call renderer draw
+        # self.renderer.draw()
+        # image, probe = self.renderer.image.to_numpy(), self.renderer.probe.to_numpy()
+
+        self.canvas[1].clear()
         
-        # Put the image to the canvas
-        img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-        self.canvas.put_image_data(img_data, self.padding, self.padding)
+        # # Put the image to the canvas
+        # img_data = (image * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
+        # self.canvas.put_image_data(img_data, self.padding, self.padding)
+        
+        # # Put the image to the canvas
+        # img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # # img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
+        # self.canvas.put_image_data(img_data, self.padding, self.padding)
+
+        # Put the probe rectangle to the canvas
+        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
+        probe_x, probe_y = self.mouse_state[0], self.mouse_state[1]
+        self.canvas[1].stroke_style = 'red' if self.mouse_state[2] > 0 else 'white'
+        self.canvas[1].stroke_rect(
+            int(probe_x - probe_w//2 + self.padding), 
+            int(probe_y - probe_h//2 + self.padding), 
+            int(probe_w), 
+            int(probe_h))
+        # self.canvas.stroke_rect(50, 50, 50, 50)
+
+        # # Put the probe to the canvas
+        # probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+        # self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
         # Put the probe to the canvas
-        probe_data = (probe * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-        self.canvas.put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+        probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+        self.canvas[1].put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
     # def mouse_callback(self, x, y, pressed: int = 0):
     #     """Handle mouse, compute probe features, update synth(s), and render kernels."""
@@ -313,10 +388,11 @@ class App():
                 self.mouse_state[2] = 0
                 self.enable_dsp(False)
 
+            self.draw()
+
             # self.canvas.clear()
             # self.canvas.fill_circle(x, y, 10)
 
-            self.draw()
 
 
 
