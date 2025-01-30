@@ -125,7 +125,12 @@ class App():
         self.master_volume_slider.observe(self.update_master_volume, names='value')
 
     def create_audio_graph(self):
-        self.graph = sf.AudioGraph(start=False)
+        self.graph = sf.AudioGraph.get_shared_graph()
+        if self.graph is None:
+            self.graph = sf.AudioGraph(start=False)
+        else:
+            self.graph.destroy()
+            self.graph = sf.AudioGraph(start=False)
 
         # DSP switch
         self.dsp_switch_buf = sf.Buffer(1, 1)
