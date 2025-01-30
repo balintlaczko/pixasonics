@@ -1,5 +1,6 @@
 from .features import Feature
 from .utils import scale_array_exp
+from .ui import MapperCard
 import taichi as ti
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
@@ -156,17 +157,17 @@ class App():
         self.dsp_switch_buf.data[0][0] = 1 if state else 0
 
     
-    def add_synth(self, synth):
+    def attach_synth(self, synth):
         self.synths.append(synth)
         self.bus.add_input(synth.output)
     
-    def add_feature(self, feature):
+    def attach_feature(self, feature):
         self.features.append(feature)
     
-    def add_mapper(self, mapper):
+    def attach_mapper(self, mapper):
         self.mappers.append(mapper)
 
-    def remove_mapper(self, mapper):
+    def detach_mapper(self, mapper):
         if mapper in self.mappers:
             self.mappers.remove(mapper)
     
@@ -411,15 +412,20 @@ class Mapper():
         self.exponent = exponent
         self.clamp = clamp
 
-        self.create_gui()
+        self.id = str(id(self))
 
-    def create_gui(self):
-        self.description_text = f"Mapper: {self.obj_in.name} ==> {self.obj_out['name']}"
-        self.description_label = widgets.Label(value=self.description_text)
-        display(self.description_label)
+        self.card = MapperCard(
+            id=self.id,
+            from_name=self.obj_in.name,
+            to_name=self.obj_out["name"],
+        )
+
+    @property
+    def ui(self):
+        return self.card()
 
     def __repr__(self):
-        return self.description_text
+        return f"Mapper {self.id}: {self.obj_in.name} -> {self.obj_out['name']}"
 
     @property
     def in_low(self):
