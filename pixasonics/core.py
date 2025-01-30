@@ -81,10 +81,10 @@ class App():
             value=False,
             description='Audio',
             disabled=False,
-            button_style='', # 'success', 'info', 'warning', 'danger' or ''
             tooltip='Toggle audio',
-            layout=widgets.Layout(width='auto')
+            layout=widgets.Layout(width='auto'),
         )
+        self.audio_graph_toggle.style.text_color = 'black'
         display(self.audio_graph_toggle)
 
         # Create a master volume slider
@@ -160,6 +160,10 @@ class App():
     
     def add_mapper(self, mapper):
         self.mappers.append(mapper)
+
+    def remove_mapper(self, mapper):
+        if mapper in self.mappers:
+            self.mappers.remove(mapper)
     
     def compute_features(self, probe_mat):
         for feature in self.features:
@@ -266,8 +270,10 @@ class App():
     def toggle_audio(self, change):
         if change['new']:
             self.graph.start()
+            self.audio_graph_toggle.style.text_color = 'green'
         else:
             self.graph.stop()
+            self.audio_graph_toggle.style.text_color = 'black'
 
     def update_master_volume(self, change):
         self.master_slider_db.set_value(change['new'])
