@@ -28,17 +28,20 @@ class Feature():
             min_text = widgets.Text(
                 value='',
                 description=f'{self.name}_{i}_Min:',
-                disabled=True
+                disabled=True,
+                style=dict(description_width='auto')
             )
             max_text = widgets.Text(
                 value='',
-                description=f'{self.name}_{i}_Min:',
-                disabled=True
+                description=f'{self.name}_{i}_Max:',
+                disabled=True,
+                style=dict(description_width='auto')
             )
             last_text = widgets.Text(
                 value='',
                 description=f'{self.name}_{i}_Last:',
-                disabled=True
+                disabled=True,
+                style=dict(description_width='auto')
             )
             self.widgets.append((min_text, max_text, last_text))
         # attach them to the display
@@ -48,7 +51,10 @@ class Feature():
             display(last_text)
         
         # create a reset button
-        self.reset_btn = widgets.Button(description=f'Reset {self.name} MinMax')
+        layout = widgets.Layout(width='auto', height='40px')
+        self.reset_btn = widgets.Button(
+            description=f'Reset {self.name} MinMax',
+            layout=layout)
         display(self.reset_btn)
         self.reset_btn.on_click(self.reset_minmax)
 

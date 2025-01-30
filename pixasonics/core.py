@@ -47,6 +47,9 @@ class App():
             height=self.image_size[1] + self.padding*2)
         display(self.canvas)
         
+        slider_layout = widgets.Layout(width='400px')
+        slider_style = dict(description_width='auto')
+
         # Create two sliders for controlling the Probe size
         self.probe_w_slider = widgets.IntSlider(
             value=50,  # Initial value
@@ -54,6 +57,8 @@ class App():
             max=self.image_size[0],   # Maximum size
             step=1, # Step size
             description='Probe Width',
+            style=slider_style,
+            layout=slider_layout
         )
         display(self.probe_w_slider)
 
@@ -63,6 +68,8 @@ class App():
             max=self.image_size[1],   # Maximum size
             step=1, # Step size
             description='Probe Height',
+            style=slider_style,
+            layout=slider_layout
         )
         display(self.probe_h_slider)
 
@@ -76,7 +83,7 @@ class App():
             disabled=False,
             button_style='', # 'success', 'info', 'warning', 'danger' or ''
             tooltip='Toggle audio',
-            icon="speaker"
+            layout=widgets.Layout(width='auto')
         )
         display(self.audio_graph_toggle)
 
@@ -87,6 +94,8 @@ class App():
             max=0,   # Maximum value
             step=0.01, # Step size
             description='Master Volume (dB)',
+            style=slider_style,
+            layout=slider_layout
         )
         display(self.master_volume_slider)
 
@@ -390,6 +399,16 @@ class Mapper():
         self._out_high = out_high
         self.exponent = exponent
         self.clamp = clamp
+
+        self.create_gui()
+
+    def create_gui(self):
+        self.description_text = f"Mapper: {self.obj_in.name} ==> {self.obj_out['name']}"
+        self.description_label = widgets.Label(value=self.description_text)
+        display(self.description_label)
+
+    def __repr__(self):
+        return self.description_text
 
     @property
     def in_low(self):
