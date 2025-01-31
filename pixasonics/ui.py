@@ -76,18 +76,11 @@ class ProbeSettings():
 
     def __call__(self):
         return self.box
-    
-    def w_slider_callback(self, change):
-        """override this method to handle width slider changes"""
-        pass
-
-    def h_slider_callback(self, change):
-        """override this method to handle height slider changes"""
-        pass
 
     def create_ui(self):
         probe_w_label = Label(value="Probe Width:")
         probe_w_slider = IntSlider(value=50, min=1, max=500, step=1)
+        probe_w_slider.tag = "probe_w_slider"
         probe_w_box = Box(
             [probe_w_label, probe_w_slider], 
             layout=Layout(
@@ -98,6 +91,7 @@ class ProbeSettings():
 
         probe_h_label = Label(value="Probe Height:")
         probe_h_slider = IntSlider(value=50, min=1, max=500, step=1)
+        probe_h_slider.tag = "probe_h_slider"
         probe_h_box = Box(
             [probe_h_label, probe_h_slider], 
             layout=Layout(
@@ -116,9 +110,6 @@ class ProbeSettings():
                 # padding='5px',
                 # margin='5px'
                 ))
-        
-        probe_w_slider.observe(self.w_slider_callback, names='value')
-        probe_h_slider.observe(self.h_slider_callback, names='value')
 
 
 class AudioSettings():
@@ -127,14 +118,6 @@ class AudioSettings():
 
     def __call__(self):
         return self.box
-    
-    def switch_callback(self, change):
-        """override this method to handle switch changes"""
-        pass
-
-    def volume_slider_callback(self, change):
-        """override this method to handle volume slider changes"""
-        pass
 
     def create_ui(self):
         audio_switch = ToggleButton(
@@ -147,6 +130,7 @@ class AudioSettings():
                 max_width='100px',
                 height='auto')
         )
+        audio_switch.tag = "audio_switch"
 
         master_volume_label = Label(value="Master Volume (dB):")
 
@@ -158,6 +142,7 @@ class AudioSettings():
             orientation='horizontal',
             layout=Layout(width='100%', height='auto')
         )
+        master_volume_slider.tag = "master_volume_slider"
 
         master_volume_box = Box(
             [master_volume_label, master_volume_slider],
@@ -177,9 +162,6 @@ class AudioSettings():
                 # padding='5px',
                 # margin='5px'
                 ))
-        
-        audio_switch.observe(self.switch_callback, names='value')
-        master_volume_slider.observe(self.volume_slider_callback, names='value')
 
 
 class AppUI():
@@ -190,37 +172,44 @@ class AppUI():
             canvas_width=500,
             canvas_height=500, 
             ):
-        self.probe_settings = probe_settings
-        self.audio_settings = audio_settings
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        self.create_ui()
+        self.create_ui(probe_settings, audio_settings)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self):
+    def create_ui(self, probe_settings, audio_settings):
         features_carousel = VBox([])
+        features_carousel.tag = "features_carousel"
         synths_carousel = VBox([])
+        synths_carousel.tag = "synths_carousel"
         mappers_carousel = VBox([])
+        mappers_carousel.tag = "mappers_carousel"
 
         app_canvas = Box(
             [],
             layout=Layout(
-                width=f'{self.canvas_width}px', 
-                height=f'{self.canvas_height}px')
+                width=f'{self.canvas_width}px',
+                min_width=f'{self.canvas_width}px', 
+                height=f'{self.canvas_height}px',
+                min_height=f'{self.canvas_height}px',
+                border='1px solid black',
+                margin='5px',)
         )
+        app_canvas.tag = "app_canvas"
 
         app_settings = Accordion(
             children=[
-                self.probe_settings(), 
-                self.audio_settings(),
+                probe_settings(), 
+                audio_settings(),
                 features_carousel, 
                 synths_carousel, 
                 mappers_carousel],
             titles=('Probe', 'Audio', "Features", "Synths", "Mappers"),
             layout=Layout(width='400px', min_width='300px', max_width='400px'))
+        app_settings.tag = "app_settings"
 
         app_settings_container = Box(
             [app_settings], 
@@ -235,5 +224,58 @@ class AppUI():
             layout=Layout(
                 width='auto', 
                 height='auto', 
-                justify_content='space-around'))
- 
+                justify_content='center'))
+
+
+class Model():
+    def __init__(self, val = None):
+        self._value = val
+        self._widget = None
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, new_val):
+        self._value = new_val
+        # If a widget is linked, update its value
+        if self._widget and self._widget.value != new_val:
+            self._widget.value = new_val
+
+    def bind_widget(self, widget, extra_callback=None):
+        # Store the widget reference
+        self._widget = widget
+        
+        # Update the class attribute when the widget changes
+        def on_widget_change(change, extra_callback):
+            if change['name'] == 'value':
+                self.value = change['new']
+                if extra_callback is not None:
+                    extra_callback()
+        
+        widget.observe(lambda x : on_widget_change(x, extra_callback=extra_callback) , names='value')
+
+
+# Function to search recursively by tag
+def find_widget_by_tag(container, tag):
+    """
+    Recursively search through a container for a widget with a specific custom tag.
+
+    Args:
+        container: A widget container (e.g., VBox, HBox).
+        tag: The custom tag to search for.
+
+    Returns:
+        The widget if found, otherwise None.
+    """
+    # Check if the container itself has the tag
+    if hasattr(container, 'tag') and container.tag == tag:
+        return container
+
+    # If the container has children, search recursively
+    if hasattr(container, 'children'):
+        for child in container.children:
+            found_widget = find_widget_by_tag(child, tag)
+            if found_widget:
+                return found_widget

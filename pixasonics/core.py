@@ -1,6 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp
-from .ui import MapperCard
+from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
+from .utils import samps2mix
 import taichi as ti
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
@@ -9,121 +10,149 @@ import time
 import numpy as np
 import signalflow as sf
 from PIL import Image
-from .utils import samps2mix
+
 
 
 class App():
     def __init__(
             self,
             image_size: tuple[int] = (500, 500),
-            padding: int = 40,
-            fps: int = 60,
-            probe_stroke: int = 1,
+            fps: int = 120,
             ):
         
         self.image_size = image_size
-        self.padding = padding
         self.refresh_interval = 1 / fps
 
         # Global state variables
         self.is_drawing = False
         self.last_draw_time = time.time()
-        self.mouse_state = np.array([self.image_size[0]//2, self.image_size[1]//2, 0], dtype=np.int32)  # x, y, pressed
-        self.probe_state = np.array([50, 50, probe_stroke], dtype=np.int32)  # w, h, stroke
+        self.bg_np = np.zeros(image_size + (3,), dtype=np.float32) # np.array(img, dtype=np.float32) / 255
+
+        # Private properties
+        self._probe_x = 0
+        self._probe_y = 0
+        self._mouse_btn = 0
+        self._probe_width = Model(50)
+        self._probe_height = Model(50)
+        self._master_volume = Model(0)
+        self._audio = Model(0)
 
         # Containers for features, mappers, and synths
         self.features = []
         self.mappers = []
         self.synths = []
 
-        self.create_gui()
+        self.create_ui()
         self.create_audio_graph()
-        
 
-    def create_gui(self):
+    @property
+    def probe_x(self):
+        return self._probe_x
+    
+    @probe_x.setter
+    def probe_x(self, value):
+        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+        x_clamped = np.clip(value, self.probe_width//2, self.image_size[0]-1-self.probe_width//2)
+        self._probe_x = int(round(x_clamped))
+        self.draw()
+    
+    @property
+    def probe_y(self):
+        return self._probe_y
+    
+    @probe_y.setter
+    def probe_y(self, value):
+        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+        y_clamped = np.clip(value, self.probe_height//2, self.image_size[1]-1-self.probe_height//2)
+        self._probe_y = int(round(y_clamped))
+        self.draw()
+
+    def update_probe_xy(self):
+        self.probe_x = self.probe_x
+        self.probe_y = self.probe_y
+        # self.draw()
+
+    @property
+    def mouse_btn(self):
+        return self._mouse_btn
+    
+    @mouse_btn.setter
+    def mouse_btn(self, value):
+        self._mouse_btn = value
+        self.enable_dsp(True) if value > 0 else self.enable_dsp(False)
+
+    @property
+    def probe_width(self):
+        return self._probe_width.value
+    
+    @probe_width.setter
+    def probe_width(self, value):
+        self._probe_width.value = value
+        # Update mouse xy to keep it in the middle of the probe
+        self.update_probe_xy()
+
+    @property
+    def probe_height(self):
+        return self._probe_height.value
+    
+    @probe_height.setter
+    def probe_height(self, value):
+        self._probe_height.value = value
+        # Update mouse xy to keep it in the middle of the probe
+        self.update_probe_xy()
+
+    @property
+    def master_volume(self):
+        return self._master_volume.value
+    
+    @master_volume.setter
+    def master_volume(self, value):
+        self._master_volume.value = value
+
+    @property
+    def audio(self):
+        return self._audio.value
+    
+    @audio.setter
+    def audio(self, value):
+        self._audio.value = value
+
+
+    def create_ui(self):
+        probe_settings = ProbeSettings()
+        audio_settings = AudioSettings()
+        self.ui = AppUI(probe_settings, audio_settings)()
+        display(self.ui)
+
         # Create the canvas
         self.canvas = MultiCanvas(
             2,
-            width=self.image_size[0]*2 + self.padding*2, 
-            height=self.image_size[1] + self.padding*2)
-        display(self.canvas)
-        
-        slider_layout = widgets.Layout(width='400px')
-        slider_style = dict(description_width='auto')
+            width=self.image_size[0], 
+            height=self.image_size[1])
+        app_canvas = find_widget_by_tag(self.ui, "app_canvas")
+        app_canvas.children = [self.canvas]
 
-        # Create two sliders for controlling the Probe size
-        self.probe_w_slider = widgets.IntSlider(
-            value=50,  # Initial value
-            min=1,  # Minimum size
-            max=self.image_size[0],   # Maximum size
-            step=1, # Step size
-            description='Probe Width',
-            style=slider_style,
-            layout=slider_layout
-        )
-        display(self.probe_w_slider)
-
-        self.probe_h_slider = widgets.IntSlider(
-            value=50,  # Initial value
-            min=1,  # Minimum size
-            max=self.image_size[1],   # Maximum size
-            step=1, # Step size
-            description='Probe Height',
-            style=slider_style,
-            layout=slider_layout
-        )
-        display(self.probe_h_slider)
-
-        # Set them to the probe size
-        self.probe_state[0], self.probe_state[1] = [self.probe_w_slider.value, self.probe_h_slider.value]
-
-        # Create a toggle button for audio
-        self.audio_graph_toggle = widgets.ToggleButton(
-            value=False,
-            description='Audio',
-            disabled=False,
-            tooltip='Toggle audio',
-            layout=widgets.Layout(width='auto'),
-        )
-        self.audio_graph_toggle.style.text_color = 'black'
-        display(self.audio_graph_toggle)
-
-        # Create a master volume slider
-        self.master_volume_slider = widgets.FloatSlider(
-            value=0,  # Initial value
-            min=-36,  # Minimum value
-            max=0,   # Maximum value
-            step=0.01, # Step size
-            description='Master Volume (dB)',
-            style=slider_style,
-            layout=slider_layout
-        )
-        display(self.master_volume_slider)
-
-        # Create two text widgets for displaying the mouse position in px
-        self.mouse_x_text = widgets.Text(
-            value='',
-            description='MouseX:',
-            disabled=True
-        )
-        self.mouse_y_text = widgets.Text(
-            value='',
-            description='MouseY:',
-            disabled=True
-        )
-        display(self.mouse_x_text)
-        display(self.mouse_y_text)
-
-        # Mousing event listeners
+        # Canvas mousing event listeners
         self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
 
-        # GUI event listeners
-        self.probe_w_slider.observe(self.update_probe_width, names='value')
-        self.probe_h_slider.observe(self.update_probe_height, names='value')
-        self.audio_graph_toggle.observe(self.toggle_audio, names='value')
-        self.master_volume_slider.observe(self.update_master_volume, names='value')
+        # Bind the probe width and height to the sliders
+        probe_w_slider = find_widget_by_tag(self.ui, "probe_w_slider")
+        self._probe_width.bind_widget(probe_w_slider, extra_callback=self.update_probe_xy)
+        probe_h_slider = find_widget_by_tag(self.ui, "probe_h_slider")
+        self._probe_height.bind_widget(probe_h_slider, extra_callback=self.update_probe_xy)
+
+        # Bind the audio toggle and master volume to the widgets
+        audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+        self._audio.bind_widget(audio_switch, extra_callback=self.toggle_dsp)
+        master_volume_slider = find_widget_by_tag(self.ui, "master_volume_slider")
+        self._master_volume.bind_widget(master_volume_slider)
+
+
+    def __call__(self):
+        return self.ui
+    
 
     def create_audio_graph(self):
         self.graph = sf.AudioGraph.get_shared_graph()
@@ -139,13 +168,13 @@ class App():
         self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
-        self.master_slider_db = sf.Constant(self.master_volume_slider.value)
+        self.master_slider_db = sf.Constant(self.master_volume)
         self.master_slider_a = sf.DecibelsToAmplitude(self.master_slider_db)
-        self.master_volume = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
+        self.master_volume_smooth = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
 
         # Main bus
         self.bus = sf.Bus(num_channels=2)
-        self.audio_out = self.bus * self.master_volume
+        self.audio_out = self.bus * self.master_volume_smooth
 
         # Check if HW has 2 channels
         if self.graph.num_output_channels < 2:
@@ -188,16 +217,14 @@ class App():
         # Put the image to the canvas
         img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
         img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
-        self.canvas[0].put_image_data(img_data, self.padding, self.padding)
+        self.canvas[0].put_image_data(img_data, 0, 0)
 
 
     def get_probe_matrix(self):
         """Get the probe matrix from the background image."""
-        x, y = self.mouse_state[0], self.mouse_state[1]
-        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-        x_from = max(x - probe_w//2, 0)
-        y_from = max(y - probe_h//2, 0)
-        probe = self.bg_np[x_from : x_from + probe_w, y_from : y_from + probe_h]
+        x_from = max(self.probe_x - self.probe_width//2, 0)
+        y_from = max(self.probe_y - self.probe_height//2, 0)
+        probe = self.bg_np[x_from : x_from + self.probe_width, y_from : y_from + self.probe_height]
         return probe
     
 
@@ -217,19 +244,17 @@ class App():
         self.canvas[1].clear()
 
         # Put the probe rectangle to the canvas
-        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-        probe_x, probe_y = self.mouse_state[0], self.mouse_state[1]
-        self.canvas[1].stroke_style = 'red' if self.mouse_state[2] > 0 else 'white'
+        self.canvas[1].stroke_style = 'red' if self.mouse_btn > 0 else 'yellow'
         self.canvas[1].stroke_rect(
-            int(probe_x - probe_w//2 + self.padding), 
-            int(probe_y - probe_h//2 + self.padding), 
-            int(probe_w), 
-            int(probe_h))
+            int(self.probe_x - self.probe_width//2), 
+            int(self.probe_y - self.probe_height//2), 
+            int(self.probe_width), 
+            int(self.probe_height))
 
         # Put the probe to the canvas
-        probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-        self.canvas[1].put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+        # probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
+        # self.canvas[1].put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
 
 
     def mouse_callback(self, x, y, pressed: int = 0):
@@ -242,47 +267,27 @@ class App():
         self.last_draw_time = current_time  # Update the last event time
 
         with hold_canvas(self.canvas):
-
-            probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-            # clamp x and y to the image size (undo padding) and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-            x_clamped = np.clip(x-self.padding, probe_w//2, self.image_size[0]-1-probe_w//2)
-            y_clamped = np.clip(y-self.padding, probe_h//2, self.image_size[1]-1-probe_h//2)
-            self.mouse_state[0], self.mouse_state[1] = [x_clamped, y_clamped]
-            self.mouse_x_text.value, self.mouse_y_text.value = str(x_clamped), str(y_clamped)
-
             # Update mouse state
+            self.probe_x, self.probe_y = x, y
             if pressed == 2:
-                self.mouse_state[2] = 1
-                self.enable_dsp(True)
+                self.mouse_btn = 1
             elif pressed == 3:
-                self.mouse_state[2] = 0
-                self.enable_dsp(False)
-
+                self.mouse_btn = 0
+            # Update probe features, mappers, and render canvas
             self.draw()
 
 
     # GUI callbacks
 
-    # Update probe size from sliders
-    def update_probe_width(self, change):
-        self.probe_state[0] = change['new']
-        self.draw()
-
-    def update_probe_height(self, change):
-        self.probe_state[1] = change['new']
-        self.draw()
-
-    # Toggle DSP
-    def toggle_audio(self, change):
-        if change['new']:
+    def toggle_dsp(self):
+        if self.audio > 0:
             self.graph.start()
-            self.audio_graph_toggle.style.text_color = 'green'
+            audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+            audio_switch.style.text_color = 'green'
         else:
             self.graph.stop()
-            self.audio_graph_toggle.style.text_color = 'black'
-
-    def update_master_volume(self, change):
-        self.master_slider_db.set_value(change['new'])
+            audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+            audio_switch.style.text_color = 'black'
 
 
 @ti.data_oriented
