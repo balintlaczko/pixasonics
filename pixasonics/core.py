@@ -194,11 +194,20 @@ class App():
         self.features.append(feature)
     
     def attach_mapper(self, mapper):
-        self.mappers.append(mapper)
+        print(f"Attaching {mapper}")
+        if mapper not in self.mappers:
+            self.mappers.append(mapper)
+            mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
+            mappers_carousel.children = list(mappers_carousel.children) + [mapper.ui]
+            mapper._ui.app = self
 
     def detach_mapper(self, mapper):
+        print(f"Detaching {mapper}")
         if mapper in self.mappers:
             self.mappers.remove(mapper)
+            mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
+            mappers_carousel.children = [child for child in mappers_carousel.children if child.tag != f"mapper_{mapper.id}"]
+            mapper._ui.app = None
     
     def compute_features(self, probe_mat):
         for feature in self.features:
@@ -422,15 +431,16 @@ class Mapper():
 
         self.id = str(id(self))
 
-        self.card = MapperCard(
+        self._ui = MapperCard(
             id=self.id,
             from_name=self.obj_in.name,
             to_name=self.obj_out["name"],
         )
+        self._ui.mapper = self
 
     @property
     def ui(self):
-        return self.card()
+        return self._ui()
 
     def __repr__(self):
         return f"Mapper {self.id}: {self.obj_in.name} -> {self.obj_out['name']}"

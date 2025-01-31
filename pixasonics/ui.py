@@ -10,13 +10,17 @@ class MapperCard():
         self.id = id
         self.from_name = from_name
         self.to_name = to_name
+        self.app = None
+        self.mapper = None
         self.create_ui()
 
     def __call__(self):
         return self.card
 
     def detach_callback(self, b):
-        print("Override this method to detach the mapper")
+        print("MapperCard: detaching mapper", self.id)
+        if self.app is not None and self.mapper is not None:
+            self.app.detach_mapper(self.mapper)
 
     def create_ui(self):
         mapper_label = Label(
@@ -51,7 +55,8 @@ class MapperCard():
         detach_btn = Button(
             description="Detach", 
             button_style='danger', 
-            icon='unlink')
+            icon='unlink',
+            layout=Layout(max_width='80px'))
         detach_row = Box(
             [detach_btn], 
             layout=Layout(justify_content='flex-end'))
@@ -62,12 +67,13 @@ class MapperCard():
             layout=Layout(
                 width='auto', 
                 grid_template_columns='auto', 
-                grid_template_rows='2fr 1.5fr 1.5fr 1fr',
-                max_width='300px',
-                min_height='200px',
-                border='2px solid black',
+                grid_template_rows='1fr 0.8fr 1.6fr 1fr',
+                max_width='260px',
+                min_height='140px',
+                border='1px solid black',
                 padding='5px',
                 margin='5px'))
+        self.card.tag = f"mapper_{self.id}"
         
 
 class ProbeSettings():

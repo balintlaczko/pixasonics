@@ -73,8 +73,8 @@ class Feature():
         self.update_widget()
 
     def reset_minmax(self, _ = None):
-        self.min = np.zeros_like(self.features.data) * 1e6
-        self.max = np.zeros_like(self.features.data) * -1e6
+        self.min = np.ones_like(self.features.data) * 1e6
+        self.max = np.ones_like(self.features.data) * -1e6
         self.update_widget()
 
 
