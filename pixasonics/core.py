@@ -147,7 +147,7 @@ class App():
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         self._audio.bind_widget(audio_switch, extra_callback=self.toggle_dsp)
         master_volume_slider = find_widget_by_tag(self.ui, "master_volume_slider")
-        self._master_volume.bind_widget(master_volume_slider)
+        self._master_volume.bind_widget(master_volume_slider, extra_callback=self.set_master_volume)
 
 
     def __call__(self):
@@ -168,7 +168,7 @@ class App():
         self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
-        self.master_slider_db = sf.Constant(self.master_volume)
+        self.master_slider_db = sf.Constant(0)
         self.master_slider_a = sf.DecibelsToAmplitude(self.master_slider_db)
         self.master_volume_smooth = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
 
@@ -288,6 +288,9 @@ class App():
             self.graph.stop()
             audio_switch = find_widget_by_tag(self.ui, "audio_switch")
             audio_switch.style.text_color = 'black'
+
+    def set_master_volume(self):
+        self.master_slider_db.set_value(self.master_volume)
 
 
 @ti.data_oriented
