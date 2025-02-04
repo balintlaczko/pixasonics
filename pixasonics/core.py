@@ -2,10 +2,8 @@ from .features import Feature
 from .utils import scale_array_exp
 from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .utils import samps2mix
-import taichi as ti
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
-import ipywidgets as widgets
 import time
 import numpy as np
 import signalflow as sf
@@ -187,11 +185,38 @@ class App():
 
     
     def attach_synth(self, synth):
-        self.synths.append(synth)
-        self.bus.add_input(synth.output)
+        print(f"Attaching {synth}")
+        if synth not in self.synths:
+            self.synths.append(synth)
+            self.bus.add_input(synth.output)
+            synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
+            synths_carousel.children = list(synths_carousel.children) + [synth.ui]
+            synth._ui.app = self
+
+    def detach_synth(self, synth):
+        print(f"Detaching {synth}")
+        if synth in self.synths:
+            self.synths.remove(synth)
+            self.bus.remove_input(synth.output)
+            synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
+            synths_carousel.children = [child for child in synths_carousel.children if child.tag != f"synth_{synth.id}"]
+            synth._ui.app = None
     
     def attach_feature(self, feature):
-        self.features.append(feature)
+        print(f"Attaching {feature}")
+        if feature not in self.features:
+            self.features.append(feature)
+            features_carousel = find_widget_by_tag(self.ui, "features_carousel")
+            features_carousel.children = list(features_carousel.children) + [feature.ui]
+            feature._ui.app = self
+
+    def detach_feature(self, feature):
+        print(f"Detaching {feature}")
+        if feature in self.features:
+            self.features.remove(feature)
+            features_carousel = find_widget_by_tag(self.ui, "features_carousel")
+            features_carousel.children = [child for child in features_carousel.children if child.tag != f"feature_{feature.id}"]
+            feature._ui.app = None
     
     def attach_mapper(self, mapper):
         print(f"Attaching {mapper}")
@@ -225,7 +250,6 @@ class App():
 
         # Put the image to the canvas
         img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        img_data = np.transpose(img_data, (1, 0, 2))  # Transpose to match the canvas shape
         self.canvas[0].put_image_data(img_data, 0, 0)
 
 
@@ -233,7 +257,7 @@ class App():
         """Get the probe matrix from the background image."""
         x_from = max(self.probe_x - self.probe_width//2, 0)
         y_from = max(self.probe_y - self.probe_height//2, 0)
-        probe = self.bg_np[x_from : x_from + self.probe_width, y_from : y_from + self.probe_height]
+        probe = self.bg_np[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         return probe
     
 
@@ -247,7 +271,8 @@ class App():
         self.compute_features(probe_mat)
 
         # Update mappings
-        self.compute_mappers()
+        if self.mouse_btn > 0:
+            self.compute_mappers()
 
         # Clear the canvas
         self.canvas[1].clear()
@@ -260,10 +285,11 @@ class App():
             int(self.probe_width), 
             int(self.probe_height))
 
-        # Put the probe to the canvas
+        # # Put the probe to the canvas
         # probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # probe_data = np.transpose(probe_data, (1, 0, 2))  # Transpose to match the canvas shape
-        # self.canvas[1].put_image_data(probe_data, self.image_size[0]+20+self.padding, self.padding)
+        # self.canvas[1].put_image_data(probe_data, 0, 0)
+        # if self.mouse_btn > 0:
+        #     display(Image.fromarray(probe_data))
 
 
     def mouse_callback(self, x, y, pressed: int = 0):
@@ -302,96 +328,6 @@ class App():
         self.master_slider_db.set_value(self.master_volume)
 
 
-@ti.data_oriented
-class Renderer():
-    def __init__(self,
-                 image_size: tuple[int],
-                 probe_state_buffer: ti.ndarray, # w, h, stroke
-                 mouse_state_buffer: ti.ndarray, # x, y, pressed
-
-    ):
-        self.image_size = image_size
-        self.probe_state_buffer = probe_state_buffer
-        self.mouse_state_buffer = mouse_state_buffer
-
-        self.generate_data_fields()
-
-    def generate_data_fields(self):
-        self.image = ti.Vector.field(3, dtype=float, shape=self.image_size)  # RGB field for colors
-        self.bg = ti.Vector.field(3, dtype=float, shape=self.image_size)  # Background image
-        self.bg_np = np.zeros(self.image_size + (3,))  # Background image as numpy array
-        self.probe = ti.Vector.field(3, dtype=float, shape=self.image_size)  # probe image
-
-        # Mouse and probe states
-        self.mouse_state = ti.field(dtype=int, shape=(3))  # x, y, pressed
-        self.probe_state = ti.field(dtype=int, shape=(3))  # w, h, stroke
-
-        # Initialize
-        self.image.fill(0)
-
-    def load_image(self, image_path):
-        img = Image.open(image_path)
-        img = img.resize(self.image_size)
-        img = np.array(img, dtype=np.float32) / 255
-        self.bg.from_numpy(img)
-        self.bg_np = img
-
-
-    def draw(self):
-        self.read_buffers()
-        self.draw_kernel()
-
-    @ti.kernel
-    def draw_kernel(self):
-        self.draw_image()
-        self.draw_probe()
-
-    def read_buffers(self):
-        self.mouse_state.from_numpy(self.mouse_state_buffer)
-        self.probe_state.from_numpy(self.probe_state_buffer)
-
-    @ti.func
-    def draw_image(self):
-        """Render the image and the probe over it."""
-        center_x, center_y, mouse_pressed = self.mouse_state[0], self.mouse_state[1], self.mouse_state[2]
-        probe_w, probe_h, probe_stroke = self.probe_state[0], self.probe_state[1], self.probe_state[2]
-        color = ti.Vector([1.0, 0.0, 0.0]) if mouse_pressed else ti.Vector([1.0, 1.0, 1.0])  # Red or white
-
-        for i, j in self.image:
-            dist_x = abs(i - center_x)
-            dist_y = abs(j - center_y)
-            if dist_x <= probe_w//2 and dist_y <= probe_h//2 and (dist_x >= probe_w//2 - probe_stroke or dist_y >= probe_h//2 - probe_stroke):
-                    self.image[i, j] = color  # Probe color
-            else:
-                self.image[i, j] = self.bg[i, j]  # Background image
-
-    @ti.func
-    def draw_probe(self):
-        """Render the probe contents."""
-        center_x, center_y = self.mouse_state[0], self.mouse_state[1]
-        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-
-        for i, j in self.probe:
-            if i < probe_w and j < probe_h:
-                # get bg under square
-                bg_x = i + center_x - (probe_w // 2)
-                bg_y = j + center_y - (probe_h // 2)
-                self.probe[i, j] = self.bg[bg_x, bg_y]
-            else:
-                self.probe[i, j] = ti.Vector([1.0, 1.0, 1.0]) # White
-
-
-    def get_probe_matrix(self):
-        """Get the probe matrix from the background image."""
-        x, y = self.mouse_state[0], self.mouse_state[1]
-        probe_w, probe_h = self.probe_state[0], self.probe_state[1]
-        x_from = max(x - probe_w//2, 0)
-        y_from = max(y - probe_h//2, 0)
-        probe = self.bg_np[x_from : x_from + probe_w, y_from : y_from + probe_h]
-        return probe
-
-
-
 class Mapper():
     """Map between two buffers. Typically from a feature buffer to a parameter buffer."""
     def __init__(
@@ -419,7 +355,8 @@ class Mapper():
             raise ValueError("Input object must be a Feature or a dict")
 
         # expecting a synth's param dict here
-        self.buf_out = self.obj_out["buffer"]
+        # self.buf_out = self.obj_out["buffer"]
+        self.obj_out_owner = self.obj_out["owner"]
 
         # save scaling parameters
         self._in_low = in_low
@@ -479,9 +416,22 @@ class Mapper():
         else:
             return self._out_high
 
+    # def map(self):
+    #     # scale the input buffer to the output buffer
+    #     self.buf_out.data[:,:] = scale_array_exp(
+    #         self.buf_in.data,
+    #         self.in_low,
+    #         self.in_high,
+    #         self.out_low,
+    #         self.out_high,
+    #         self.exponent
+    #     )
+    #     if self.clamp:
+    #         self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
+
     def map(self):
         # scale the input buffer to the output buffer
-        self.buf_out.data[:,:] = scale_array_exp(
+        scaled_val = scale_array_exp(
             self.buf_in.data,
             self.in_low,
             self.in_high,
@@ -490,7 +440,13 @@ class Mapper():
             self.exponent
         )
         if self.clamp:
-            self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
+            scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
+
+        self.obj_out_owner.set_input_buf(
+            self.obj_out["param_name"],
+            scaled_val,
+            from_slider=False
+        )
 
     def __call__(self):
         self.map()

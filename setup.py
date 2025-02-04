@@ -19,7 +19,7 @@ setup(
         # "pandas",
         # "scikit-learn",
         "signalflow",
-        "taichi",
+        # "taichi",
         "ipython",
         "jupyter",
         "ipycanvas",

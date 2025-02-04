@@ -1,5 +1,5 @@
-from ipywidgets import Label, Layout, Box, VBox, GridBox, Button, IntSlider, FloatSlider, ToggleButton, Accordion
-
+from ipywidgets import Label, Layout, Box, VBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text
+from math import log10
 class MapperCard():
     def __init__(
             self, 
@@ -27,13 +27,13 @@ class MapperCard():
             value="Mapper", 
             style=dict(
                 font_weight='bold',
-                font_size='2em'))
+                font_size='20px'))
         
         mapper_id = Label(
-            value=self.id, 
+            value="#" + self.id, 
             style=dict(
                 font_weight='bold',
-                font_size='1em',
+                font_size='10px',
                 text_color='gray'))
 
         top_row = Box(
@@ -74,6 +74,273 @@ class MapperCard():
                 padding='5px',
                 margin='5px'))
         self.card.tag = f"mapper_{self.id}"
+
+
+class FeatureCard():
+    def __init__(
+            self,
+            name: str = "Feature", 
+            id: str = "# ID", 
+            min: str = "(str(min array))",
+            max: str = "(str(max array))",
+            value: str = "(str(value array))",
+    ):
+        self.name = name
+        self.id = id
+        self.min = min
+        self.max = max
+        self.value = value
+        self.app = None
+        self.feature = None
+        self.create_ui()
+
+    def __call__(self):
+        return self.card
+
+    def detach_callback(self, b):
+        print("FeatureCard: detaching feature", self.id)
+        if self.app is not None and self.feature is not None:
+            self.app.detach_feature(self.feature)
+
+    def reset_callback(self, b):
+        print("FeatureCard: resetting min max", self.id)
+        if self.feature is not None:
+            self.feature.reset_minmax()
+
+    def create_ui(self):
+        feature_label = Label(
+            value=self.name, 
+            style=dict(
+                font_weight='bold',
+                font_size='20px'))
+        
+        feature_id = Label(
+            value="#" + self.id, 
+            style=dict(
+                font_weight='bold',
+                font_size='10px',
+                text_color='gray'))
+
+        top_block = Box(
+            [feature_label, feature_id], 
+            layout=Layout(
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                width='100%'))
+
+        min_label = Label(value="Min:")
+        min_value = Text(
+            value=self.min,
+            placeholder='(min array)',
+            description='',
+            disabled=True,
+            layout=Layout(width='80%')
+        )
+        min_value.tag = "min"
+        min_block = Box(
+            [min_label, min_value], 
+            layout=Layout(
+                justify_content='space-between',
+                flex_flow='row',
+                width='100%'))
+        
+        max_label = Label(value="Max:")
+        max_value = Text(
+            value=self.max,
+            placeholder='(max array)',
+            description='',
+            disabled=True,
+            layout=Layout(width='80%')
+        )
+        max_value.tag = f"max"
+        max_block = Box(
+            [max_label, max_value], 
+            layout=Layout(
+                justify_content='space-between',
+                flex_flow='row',
+                width='100%'))
+        
+        value_label = Label(value="Value:")
+        value_value = Text(
+            value=self.value,
+            placeholder='(value array)',
+            description='',
+            disabled=True,
+            layout=Layout(width='80%')
+        )
+        value_value.tag = f"value"
+        value_block = Box(
+            [value_label, value_value], 
+            layout=Layout(
+                justify_content='space-between',
+                flex_flow='row',
+                width='100%'))
+
+
+        reset_btn = Button(
+            description="Reset", 
+            button_style='warning', 
+            icon='refresh',
+            layout=Layout(max_width='80px'))
+        reset_btn.on_click(self.reset_callback)
+
+        detach_btn = Button(
+            description="Detach", 
+            button_style='danger', 
+            icon='unlink',
+            layout=Layout(max_width='80px'))
+        detach_btn.on_click(self.detach_callback)
+        
+        btn_row = Box(
+            [reset_btn, detach_btn], 
+            layout=Layout(
+                width='100%',
+                justify_content='space-between'))
+
+        self.card = Box(
+            children=[top_block, min_block, max_block, value_block, btn_row],
+            layout=Layout(
+                width='auto', 
+                flex_flow='column',
+                align_items='flex-start',
+                justify_content='flex-start',
+                max_width='260px',
+                min_height='100px',
+                border='1px solid black',
+                padding='5px',
+                margin='5px'))
+        self.card.tag = f"feature_{self.id}"
+
+
+class SynthCard():
+    def __init__(
+            self,
+            name: str = "Synth", 
+            id: str = "# ID",
+            params: dict = {},
+    ):
+        self.name = name
+        self.id = id
+        self.params = params
+        self.app = None
+        self.synth = None
+        self.create_ui()
+
+    def __call__(self):
+        return self.card
+
+    def detach_callback(self, b):
+        print("SynthCard: detaching synth", self.id)
+        if self.app is not None and self.synth is not None:
+            self.app.detach_synth(self.synth)
+
+    def reset_callback(self, b):
+        print("SynthCard: resetting to default params", self.id)
+        if self.synth is not None:
+            self.synth.reset_to_default()
+
+    def create_ui(self):        
+        synth_label = Label(
+            value=self.name, 
+            style=dict(
+                font_weight='bold',
+                font_size='20px'))
+        
+        synth_id = Label(
+            value="#" + self.id, 
+            style=dict(
+                font_weight='bold',
+                font_size='10px',
+                text_color='gray'))
+
+        top_block = Box(
+            [synth_label, synth_id], 
+            layout=Layout(
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                width='100%'))
+        
+        # create a block with a float slider for each parameter
+        param_blocks = []
+        for param_name, param in self.params.items():
+            label_str = f"{param_name} ({param['unit']})" if len(param['unit']) > 0 else param_name
+            param_label = Label(value=label_str)
+            # if the param has the 'scale' key, use it to scale the slider
+            if param['scale'] == 'log':
+                param_slider = FloatLogSlider(
+                    value=param['default'],
+                    base=10,
+                    min=log10(param['min']),
+                    max=log10(param['max']),
+                    step=0.0001,
+                    description="",
+                    readout_format='.1f',
+                    layout=Layout(width='65%')
+                )
+            elif param['scale'] == 'linear':
+                param_slider = FloatSlider(
+                    value=param['default'],
+                    min=param['min'],
+                    max=param['max'],
+                    step=0.01,
+                    description="",
+                    layout=Layout(width='65%')
+                )
+            else:
+                raise ValueError(f"SynthCard: Unknown scale '{param['scale']}' for parameter '{param_name}'")
+            param_slider.tag = param_name
+            param_slider.observe(
+                lambda change: self.synth.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value")
+            param_block = Box(
+                [param_label, param_slider], 
+                layout=Layout(
+                    justify_content='space-between',
+                    flex_flow='row',
+                    width='100%'))
+            param_blocks.append(param_block)
+
+        reset_btn = Button(
+            description="Reset", 
+            button_style='warning', 
+            icon='refresh',
+            layout=Layout(max_width='80px'))
+        reset_btn.on_click(self.reset_callback)
+
+        detach_btn = Button(
+            description="Detach", 
+            button_style='danger', 
+            icon='unlink',
+            layout=Layout(max_width='80px'))
+        detach_btn.on_click(self.detach_callback)
+        
+        btn_row = Box(
+            [reset_btn, detach_btn], 
+            layout=Layout(
+                width='100%',
+                justify_content='space-between'))
+        
+        all_children = [top_block] + param_blocks + [btn_row]
+
+        self.card = Box(
+            children=all_children,
+            layout=Layout(
+                width='auto', 
+                flex_flow='column',
+                align_items='flex-start',
+                justify_content='flex-start',
+                max_width='320px',
+                min_height='100px',
+                border='1px solid black',
+                padding='5px',
+                margin='5px'))
+        self.card.tag = f"synth_{self.id}"
         
 
 class ProbeSettings():
