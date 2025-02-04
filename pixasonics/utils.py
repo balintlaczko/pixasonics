@@ -8,6 +8,14 @@ def samps2mix(samps, eps=1e-6):
     "Convert samples to a mix value (used in sf.Smooth)"
     return eps ** (1 / samps)
 
+def frame2sec(frame, fps):
+    "Convert a frame number to seconds"
+    return frame / fps
+
+def sec2frame(sec, fps):
+    "Convert seconds to a frame number"
+    return int(round(sec * fps))
+
 # @jit(nopython=True)
 # TODO: add numba support?
 def scale_array_exp(

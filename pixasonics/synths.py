@@ -3,7 +3,7 @@ from .utils import samps2mix
 from .ui import SynthCard, find_widget_by_tag
 
 class Theremin(sf.Patch):
-    def __init__(self, frequency=440, amplitude=0.5, smooth_n_samps=24000):
+    def __init__(self, frequency=440, amplitude=0.5, panning=0, smooth_n_samps=24000):
         super().__init__()
         self.input_buffers = {}
         self.params = {
@@ -14,6 +14,7 @@ class Theremin(sf.Patch):
                 "unit": "Hz",
                 "scale": "log",
                 "buffer": None,
+                "buffer_player": None,
                 "name": "Theremin Frequency",
                 "param_name": "frequency",
                 "owner": self
@@ -25,6 +26,7 @@ class Theremin(sf.Patch):
                 "unit": "",
                 "scale": "linear",
                 "buffer": None,
+                "buffer_player": None,
                 "name": "Theremin Amplitude",
                 "param_name": "amplitude",
                 "owner": self
@@ -36,32 +38,36 @@ class Theremin(sf.Patch):
                 "unit": "",
                 "scale": "linear",
                 "buffer": None,
+                "buffer_player": None,
                 "name": "Theremin Panning",
                 "param_name": "panning",
                 "owner": self
             }
         }
 
-        buf_frequency = sf.Buffer(1, 1)
-        buf_amplitude = sf.Buffer(1, 1)
-        buf_panning = sf.Buffer(1, 1)
+        self.frequency_buffer = sf.Buffer(1, 1)
+        self.amplitude_buffer = sf.Buffer(1, 1)
+        self.panning_buffer = sf.Buffer(1, 1)
         
-        buf_frequency.data[0][0] = frequency
-        self.params["frequency"]["buffer"] = buf_frequency
+        self.frequency_buffer.data[0][0] = frequency
+        self.params["frequency"]["buffer"] = self.frequency_buffer
         
-        buf_amplitude.data[0][0] = amplitude
-        self.params["amplitude"]["buffer"] = buf_amplitude
+        self.amplitude_buffer.data[0][0] = amplitude
+        self.params["amplitude"]["buffer"] = self.amplitude_buffer
 
-        buf_panning.data[0][0] = 0
-        self.params["panning"]["buffer"] = buf_panning
+        self.panning_buffer.data[0][0] = panning
+        self.params["panning"]["buffer"] = self.panning_buffer
         
-        frequency_value = sf.BufferPlayer(buf_frequency, loop=True)
-        amplitude_value = sf.BufferPlayer(buf_amplitude, loop=True)
-        panning_value = sf.BufferPlayer(buf_panning, loop=True)
+        self.frequency_value = sf.BufferPlayer(self.frequency_buffer, loop=True)
+        self.params["frequency"]["buffer_player"] = self.frequency_value
+        self.amplitude_value = sf.BufferPlayer(self.amplitude_buffer, loop=True)
+        self.params["amplitude"]["buffer_player"] = self.amplitude_value
+        self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
+        self.params["panning"]["buffer_player"] = self.panning_value
         
-        freq_smooth = sf.Smooth(frequency_value, samps2mix(smooth_n_samps))
-        amplitude_smooth = sf.Smooth(amplitude_value, samps2mix(smooth_n_samps))
-        panning_smooth = sf.Smooth(panning_value, samps2mix(smooth_n_samps))
+        freq_smooth = sf.Smooth(self.frequency_value, samps2mix(smooth_n_samps))
+        amplitude_smooth = sf.Smooth(self.amplitude_value, samps2mix(smooth_n_samps))
+        panning_smooth = sf.Smooth(self.panning_value, samps2mix(smooth_n_samps))
         
         sine = sf.SineOscillator(freq_smooth)
         output = sf.StereoPanner(sine * amplitude_smooth, pan=panning_smooth)

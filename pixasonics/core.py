@@ -1,5 +1,5 @@
 from .features import Feature
-from .utils import scale_array_exp
+from .utils import scale_array_exp, frame2sec, sec2frame
 from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .utils import samps2mix
 from ipycanvas import hold_canvas, MultiCanvas
@@ -16,9 +16,11 @@ class App():
             self,
             image_size: tuple[int] = (500, 500),
             fps: int = 120,
+            nrt: bool = False
             ):
         
         self.image_size = image_size
+        self.fps = fps
         self.refresh_interval = 1 / fps
 
         # Global state variables
@@ -34,6 +36,7 @@ class App():
         self._probe_height = Model(50)
         self._master_volume = Model(0)
         self._audio = Model(0)
+        self._nrt = nrt
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -44,6 +47,17 @@ class App():
         self.create_audio_graph()
 
     @property
+    def nrt(self):
+        return self._nrt
+    
+    @nrt.setter
+    def nrt(self, value):
+        self._nrt = value
+        self.create_audio_graph()
+        for mapper in self.mappers:
+            mapper.nrt = value
+
+    @property
     def probe_x(self):
         return self._probe_x
     
@@ -52,7 +66,8 @@ class App():
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
         x_clamped = np.clip(value, self.probe_width//2, self.image_size[0]-1-self.probe_width//2)
         self._probe_x = int(round(x_clamped))
-        self.draw()
+        if not self._nrt:
+            self.draw()
     
     @property
     def probe_y(self):
@@ -63,7 +78,8 @@ class App():
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
         y_clamped = np.clip(value, self.probe_height//2, self.image_size[1]-1-self.probe_height//2)
         self._probe_y = int(round(y_clamped))
-        self.draw()
+        if not self._nrt:
+            self.draw()
 
     def update_probe_xy(self):
         self.probe_x = self.probe_x
@@ -81,7 +97,7 @@ class App():
 
     @property
     def probe_width(self):
-        return self._probe_width.value
+        return int(self._probe_width.value)
     
     @probe_width.setter
     def probe_width(self, value):
@@ -91,7 +107,7 @@ class App():
 
     @property
     def probe_height(self):
-        return self._probe_height.value
+        return int(self._probe_height.value)
     
     @probe_height.setter
     def probe_height(self, value):
@@ -154,15 +170,22 @@ class App():
 
     def create_audio_graph(self):
         self.graph = sf.AudioGraph.get_shared_graph()
+        output_device = sf.AudioOut_Dummy(2) if self.nrt else None
         if self.graph is None:
-            self.graph = sf.AudioGraph(start=False)
+            self.graph = sf.AudioGraph(
+                start=self.nrt,
+                output_device=output_device
+                )
         else:
             self.graph.destroy()
-            self.graph = sf.AudioGraph(start=False)
+            self.graph = sf.AudioGraph(
+                start=self.nrt,
+                output_device=output_device
+                )
 
         # DSP switch
         self.dsp_switch_buf = sf.Buffer(1, 1)
-        self.dsp_switch_buf.data[0][0] = 0
+        self.dsp_switch_buf.data[0][0] = 1 if self.nrt else 0
         self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
@@ -177,7 +200,17 @@ class App():
         # Check if HW has 2 channels
         if self.graph.num_output_channels < 2:
             self.audio_out = sf.ChannelMixer(1, self.audio_out)
+
+        # Add any registered synths to the bus
+        for synth in self.synths:
+            self.bus.add_input(synth.output)
+
+        # Connect the audio graph
         self.audio_out.play()
+
+        # start graph if audio is enabled
+        if self.audio > 0 and not self.nrt:
+            self.graph.start()
 
 
     def enable_dsp(self, state: bool):
@@ -225,6 +258,7 @@ class App():
             mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
             mappers_carousel.children = list(mappers_carousel.children) + [mapper.ui]
             mapper._ui.app = self
+            mapper._app = self
 
     def detach_mapper(self, mapper):
         print(f"Detaching {mapper}")
@@ -233,14 +267,15 @@ class App():
             mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
             mappers_carousel.children = [child for child in mappers_carousel.children if child.tag != f"mapper_{mapper.id}"]
             mapper._ui.app = None
+            mapper._app = None
     
     def compute_features(self, probe_mat):
         for feature in self.features:
             feature(probe_mat)
         
-    def compute_mappers(self):
+    def compute_mappers(self, frame=None):
         for mapper in self.mappers:
-            mapper()
+            mapper(frame)
         
 
     def load_image(self, image_path):
@@ -260,6 +295,104 @@ class App():
         probe = self.bg_np[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         return probe
     
+
+    def render_timeline_to_array(self, timeline):
+        out_buf = self.render_timeline(timeline)
+        arr = np.copy(out_buf.data)
+        self.nrt = 0
+        return arr
+    
+
+    def render_timeline_to_file(self, timeline, target_filename):
+        out_buf = self.render_timeline(timeline)
+        out_buf.save(target_filename)
+        self.nrt = 0
+    
+
+    def render_timeline(self, timeline):
+        # create an output buffer to store the rendered audio
+        last_time_s, _ = timeline[-1]
+        self._output_samps = int(np.ceil(last_time_s * self.graph.sample_rate))
+        self._render_nframes = int(np.ceil(last_time_s * self.fps))
+        _output_buffer = sf.Buffer(2, self._output_samps)
+        _output_buffer.sample_rate = self.graph.sample_rate
+
+        # generate internal timeline buffers for each render frame
+        timeline_frames = self.generate_timeline_frames(timeline, self._render_nframes, self.fps)
+        
+        # switch on NRT mode
+        self.nrt = 1
+
+        # render the timeline
+        for frame in range(self._render_nframes):
+            frame_settings = {key: val[frame] for key, val in timeline_frames.items()}
+            self.render_frame(frame, frame_settings)
+
+        # render NRT audio
+        self.graph.render_to_buffer(_output_buffer)
+
+        return _output_buffer
+
+
+    def render_frame(self, frame, settings):
+        # set the app to the settings
+        self.probe_x = settings["probe_x"]
+        self.probe_y = settings["probe_y"]
+        self.probe_width = settings["probe_width"]
+        self.probe_height = settings["probe_height"]
+
+        # Get probe matrix
+        probe_mat = self.get_probe_matrix()
+
+        # Compute probe features
+        self.compute_features(probe_mat)
+
+        # Update mappings
+        self.compute_mappers(frame=frame)
+
+
+    def standardize_timeline(self, timeline):
+        """Fill in missing values in the timeline with the previous values."""
+        latest_setting = {
+            "probe_width": 1,
+            "probe_height": 1,
+            "probe_x": 0,
+            "probe_y": 0,
+        }
+        new_timeline = []
+        for time, settings in timeline:
+            new_settings = {**latest_setting, **settings}
+            new_timeline.append((time, new_settings))
+            latest_setting = new_settings
+        return new_timeline
+
+
+    def generate_timeline_frames(self, timeline, num_frames, fps):
+        # initialize the timeline arrays
+        timeline_frames = {
+            "probe_width": np.zeros(num_frames),
+            "probe_height": np.zeros(num_frames),
+            "probe_x": np.zeros(num_frames),
+            "probe_y": np.zeros(num_frames),
+        }
+
+        standardized_timeline = self.standardize_timeline(timeline)
+
+        # fill the timeline arrays
+        for i in range(len(timeline) - 1):
+            current_time, current_settings = standardized_timeline[i]
+            next_time, next_settings = standardized_timeline[i+1]
+            current_frame = sec2frame(current_time, fps)
+            next_frame = sec2frame(next_time, fps)
+            n_frames = next_frame - current_frame
+
+            for key in timeline_frames.keys():
+                current_val = current_settings[key]
+                next_val = next_settings[key]
+                timeline_frames[key][current_frame:next_frame] = np.linspace(current_val, next_val, n_frames)
+
+        return timeline_frames
+
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
@@ -294,6 +427,8 @@ class App():
 
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
+        if self._nrt:
+            return # Skip if we are in non-real-time mode
 
         # Drop excess events over the refresh interval
         current_time = time.time()
@@ -375,6 +510,29 @@ class Mapper():
         )
         self._ui.mapper = self
 
+        self._nrt = False
+        self._app = None
+
+    @property
+    def nrt(self):
+        return self._nrt
+    
+    @nrt.setter
+    def nrt(self, value):
+        self._nrt = value
+        # if switched on,
+        if value:
+            # create output buffer
+            self._output_buffer = sf.Buffer(1, self._app._render_nframes)
+            self._output_buffer.sample_rate = self._app.fps
+            # set target synth's buffer player to the new buffer
+            self.obj_out["buffer_player"].set_buffer("buffer", self._output_buffer)
+        # if switched off,
+        else:
+            # set target synth's buffer player back to its internal param buffer
+            self.obj_out["buffer_player"].set_buffer("buffer", self.obj_out["buffer"])
+
+
     @property
     def ui(self):
         return self._ui()
@@ -429,7 +587,7 @@ class Mapper():
     #     if self.clamp:
     #         self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
 
-    def map(self):
+    def map(self, frame=None):
         # scale the input buffer to the output buffer
         scaled_val = scale_array_exp(
             self.buf_in.data,
@@ -442,11 +600,14 @@ class Mapper():
         if self.clamp:
             scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
 
-        self.obj_out_owner.set_input_buf(
-            self.obj_out["param_name"],
-            scaled_val,
-            from_slider=False
-        )
+        if not self.nrt:
+            self.obj_out_owner.set_input_buf(
+                self.obj_out["param_name"],
+                scaled_val,
+                from_slider=False
+            )
+        else:
+            self._output_buffer.data[0][frame] = scaled_val
 
-    def __call__(self):
-        self.map()
+    def __call__(self, frame=None):
+        self.map(frame)
