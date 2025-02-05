@@ -1,6 +1,7 @@
 import numpy as np
 import signalflow as sf
 from .ui import FeatureCard, find_widget_by_tag
+from .utils import array2str
 
 
 class Feature():
@@ -8,7 +9,7 @@ class Feature():
     def __init__(self, num_features=1, name="Feature"):
         self.num_features = num_features
         self.name = name
-        self.features = sf.Buffer(1, num_features)
+        self.features = sf.Buffer(num_features, 1)
         self.min = np.ones_like(self.features.data) * 1e6
         self.max = np.ones_like(self.features.data) * -1e6
         self.id = str(id(self))
@@ -40,19 +41,15 @@ class Feature():
     
     def __repr__(self):
         return f"Feature {self.id}: {self.name}"
-    
-    def array2str(self, arr, decimals=3):
-        """String from an array, where elements are rounded to decimals, and the square brackets are removed."""
-        return str(np.round(arr, decimals)).replace('[', '').replace(']', '')
 
     def update_minmax(self):
         self.min = np.minimum(self.min, self.features.data)
         self.max = np.maximum(self.max, self.features.data)
 
     def update_ui(self):
-        self._ui_min.value = self.array2str(self.min)
-        self._ui_max.value = self.array2str(self.max)
-        self._ui_value.value = self.array2str(self.features.data) 
+        self._ui_min.value = array2str(self.min)
+        self._ui_max.value = array2str(self.max)
+        self._ui_value.value = array2str(self.features.data) 
 
     def update(self):
         self.update_minmax()
@@ -66,8 +63,12 @@ class Feature():
 
 class MeanPixelValue(Feature):
     """Compute the mean pixel value within a probe."""
-    def __init__(self):
-        super().__init__(num_features=1, name="Mean Pixel Value")
+    def __init__(self, channels=1):
+        super().__init__(num_features=channels, name="Mean Pixel Value")
+        self.channels = channels
 
     def compute(self, mat):
-        return np.mean(mat)
+        if self.channels == 1:
+            return np.mean(mat)[..., None]
+        else:
+            return np.mean(mat, axis=(0, 1))[:self.channels][..., None]

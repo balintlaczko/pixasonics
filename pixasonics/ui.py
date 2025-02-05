@@ -1,5 +1,7 @@
 from ipywidgets import Label, Layout, Box, VBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text
 from math import log10
+from .utils import array2str
+
 class MapperCard():
     def __init__(
             self, 
@@ -219,10 +221,12 @@ class SynthCard():
             name: str = "Synth", 
             id: str = "# ID",
             params: dict = {},
+            num_channels: int = 1,
     ):
         self.name = name
         self.id = id
         self.params = params
+        self.num_channels = num_channels
         self.app = None
         self.synth = None
         self.create_ui()
@@ -267,37 +271,47 @@ class SynthCard():
         for param_name, param in self.params.items():
             label_str = f"{param_name} ({param['unit']})" if len(param['unit']) > 0 else param_name
             param_label = Label(value=label_str)
-            # if the param has the 'scale' key, use it to scale the slider
-            if param['scale'] == 'log':
-                param_slider = FloatLogSlider(
-                    value=param['default'],
-                    base=10,
-                    min=log10(param['min']),
-                    max=log10(param['max']),
-                    step=0.0001,
-                    description="",
-                    readout_format='.1f',
-                    layout=Layout(width='65%')
-                )
-            elif param['scale'] == 'linear':
-                param_slider = FloatSlider(
-                    value=param['default'],
-                    min=param['min'],
-                    max=param['max'],
-                    step=0.01,
-                    description="",
-                    layout=Layout(width='65%')
-                )
+            # if the corresponding synth is single channel, use sliders for params, otherwise use text boxes
+            if self.num_channels > 1:
+                param_slider = Text(
+                    value=array2str(param['default']),
+                    placeholder='(default)',
+                    description='',
+                    disabled=True,
+                    layout=Layout(width='65%'))
+                param_slider.tag = param_name
             else:
-                raise ValueError(f"SynthCard: Unknown scale '{param['scale']}' for parameter '{param_name}'")
-            param_slider.tag = param_name
-            param_slider.observe(
-                lambda change: self.synth.set_input_buf(
-                    change["owner"].tag, 
-                    change["new"],
-                    from_slider=True
-                ), 
-                names="value")
+                # if the param has the 'scale' key, use it to scale the slider
+                if param['scale'] == 'log':
+                    param_slider = FloatLogSlider(
+                        value=param['default'],
+                        base=10,
+                        min=log10(param['min']),
+                        max=log10(param['max']),
+                        step=0.0001,
+                        description="",
+                        readout_format='.1f',
+                        layout=Layout(width='65%')
+                    )
+                elif param['scale'] == 'linear':
+                    param_slider = FloatSlider(
+                        value=param['default'],
+                        min=param['min'],
+                        max=param['max'],
+                        step=0.01,
+                        description="",
+                        layout=Layout(width='65%')
+                    )
+                else:
+                    raise ValueError(f"SynthCard: Unknown scale '{param['scale']}' for parameter '{param_name}'")
+                param_slider.tag = param_name
+                param_slider.observe(
+                    lambda change: self.synth.set_input_buf(
+                        change["owner"].tag, 
+                        change["new"],
+                        from_slider=True
+                    ), 
+                    names="value")
             param_block = Box(
                 [param_label, param_slider], 
                 layout=Layout(

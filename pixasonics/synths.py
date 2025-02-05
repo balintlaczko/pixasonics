@@ -1,15 +1,16 @@
+import numpy as np
 import signalflow as sf
-from .utils import samps2mix
+from .utils import samps2mix, broadcast_params, array2str
 from .ui import SynthCard, find_widget_by_tag
 
 class Theremin(sf.Patch):
-    def __init__(self, frequency=440, amplitude=0.5, panning=0, smooth_n_samps=24000):
+    def __init__(self, frequency=440, amplitude=0.5, panning=0):
         super().__init__()
         self.input_buffers = {}
         self.params = {
             "frequency": {
-                "min": 40,
-                "max": 8000,
+                "min": 60,
+                "max": 4000,
                 "default": 440,
                 "unit": "Hz",
                 "scale": "log",
@@ -44,19 +45,26 @@ class Theremin(sf.Patch):
                 "owner": self
             }
         }
+        self.frequency, self.amplitude, self.panning = broadcast_params(frequency, amplitude, panning)
+        self.num_channels = len(self.frequency) # at this point all lengths are the same
+        print(f"Theremin with {self.num_channels} channels")
+        self.smooth_n_samps = 24000
 
-        self.frequency_buffer = sf.Buffer(1, 1)
-        self.amplitude_buffer = sf.Buffer(1, 1)
-        self.panning_buffer = sf.Buffer(1, 1)
+        self.frequency_buffer = sf.Buffer(self.num_channels, 1)
+        self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
+        self.panning_buffer = sf.Buffer(self.num_channels, 1)
         
-        self.frequency_buffer.data[0][0] = frequency
+        self.frequency_buffer.data[:, :] = np.array(self.frequency).reshape(self.num_channels, 1)
         self.params["frequency"]["buffer"] = self.frequency_buffer
+        self.params["frequency"]["default"] = self.frequency
         
-        self.amplitude_buffer.data[0][0] = amplitude
+        self.amplitude_buffer.data[:, :] = np.array(self.amplitude).reshape(self.num_channels, 1)
         self.params["amplitude"]["buffer"] = self.amplitude_buffer
+        self.params["amplitude"]["default"] = self.amplitude
 
-        self.panning_buffer.data[0][0] = panning
+        self.panning_buffer.data[:, :] = np.array(self.panning).reshape(self.num_channels, 1)
         self.params["panning"]["buffer"] = self.panning_buffer
+        self.params["panning"]["default"] = self.panning
         
         self.frequency_value = sf.BufferPlayer(self.frequency_buffer, loop=True)
         self.params["frequency"]["buffer_player"] = self.frequency_value
@@ -65,12 +73,13 @@ class Theremin(sf.Patch):
         self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
         self.params["panning"]["buffer_player"] = self.panning_value
         
-        freq_smooth = sf.Smooth(self.frequency_value, samps2mix(smooth_n_samps))
-        amplitude_smooth = sf.Smooth(self.amplitude_value, samps2mix(smooth_n_samps))
-        panning_smooth = sf.Smooth(self.panning_value, samps2mix(smooth_n_samps))
+        freq_smooth = sf.Smooth(self.frequency_value, samps2mix(self.smooth_n_samps))
+        amplitude_smooth = sf.Smooth(self.amplitude_value, samps2mix(self.smooth_n_samps))
+        panning_smooth = sf.Smooth(self.panning_value, samps2mix(self.smooth_n_samps)) # still between -1 and 1
         
         sine = sf.SineOscillator(freq_smooth)
-        output = sf.StereoPanner(sine * amplitude_smooth, pan=panning_smooth)
+        # output = sf.StereoPanner(sine * amplitude_smooth, pan=panning_smooth)
+        output = Mixer(sine * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
         
         self.set_output(output)
 
@@ -79,14 +88,15 @@ class Theremin(sf.Patch):
 
     def set_input_buf(self, name, value, from_slider=False):
         # print(f"Setting {name} to {value}, from_slider={from_slider}")
-        self.params[name]["buffer"].data[0][0] = value
+        self.params[name]["buffer"].data[:, :] = value
         if not from_slider:
             slider = find_widget_by_tag(self.ui, name)
-            slider.value = value
+            # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
+            slider.value = value if self.num_channels == 1 else array2str(value)
 
     def reset_to_default(self):
         for param in self.params:
-            self.set_input_buf(param, self.params[param]["default"], from_slider=False)
+            self.set_input_buf(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
 
     def __getitem__(self, key):
         return self.params[key]
@@ -95,7 +105,8 @@ class Theremin(sf.Patch):
         self._ui = SynthCard(
             name="Theremin",
             id=self.id,
-            params=self.params
+            params=self.params,
+            num_channels=self.num_channels
         )
         self._ui.synth = self
         # # set up slider callbacks
@@ -117,29 +128,24 @@ class Theremin(sf.Patch):
         return f"Theremin {self.id}"
 
 
-class InputTestParent(sf.Patch):
-    def __init__(self, hello=0):
+class Mixer(sf.Patch):
+    def __init__(self, input_sig, pan_sig, out_channels=2):
         super().__init__()
-        hello = self.add_input("hello", hello)
-        input_test = InputTest()
-        input_test.play()
-        input_test.set_input("hello", hello)
-        self.set_output(input_test)
-
-class InputTest(sf.Patch):
-    def __init__(self, hello=0):
-        super().__init__()
-        hello = self.add_input("hello", hello)
-        self.set_output(hello)
+        assert input_sig.num_output_channels == pan_sig.num_output_channels
+        n = input_sig.num_output_channels
+        panner = [sf.ChannelPanner(out_channels, input_sig[i] / n, pan_sig[i]) for i in range(n)]
+        _sum = sf.Sum(panner)
+        self.set_output(_sum)
 
 
-class LinearSmooth(sf.Patch):
-    def __init__(self, input_signal, smooth_n_samps=480, sr=48000):
+class UpMixer(sf.Patch):
+    def __init__(self, input_sig, out_channels=5):
         super().__init__()
-        self.history = sf.Constant(0)
-        self.diff_signal = input_signal - self.history
-        self.smooth_coeff = 1 / smooth_n_samps
-        # self.history = self.history + (diff_signal * smooth_coeff)
-        interp = self.history + (self.diff_signal * self.smooth_coeff)
-        self.history.set_value(interp.output_buffer[0][-1])
-        self.set_output(self.history)
+        n = input_sig.num_output_channels # e.g. 2
+        output_x = np.linspace(0, n-1, out_channels) # e.g. [0, 0.25, 0.5, 0.75, 1]
+        output_y = output_x * (out_channels - 1) # e.g. [0, 1, 2, 3, 4]
+        upmixed_list = [sf.WetDry(input_sig[int(output_i)], input_sig[int(output_i) + 1], float(output_i - int(output_i))) for output_i in output_x[:-1]]
+        upmixed_list.append(input_sig[n-1])
+        expanded_list = [sf.ChannelPanner(out_channels, upmixed_list[i], float(output_y[i])) for i in range(out_channels)]
+        _out = sf.Sum(expanded_list)
+        self.set_output(_out)

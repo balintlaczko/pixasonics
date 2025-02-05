@@ -1,5 +1,5 @@
 from .features import Feature
-from .utils import scale_array_exp, frame2sec, sec2frame
+from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp
 from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .utils import samps2mix
 from ipycanvas import hold_canvas, MultiCanvas
@@ -523,7 +523,7 @@ class Mapper():
         # if switched on,
         if value:
             # create output buffer
-            self._output_buffer = sf.Buffer(1, self._app._render_nframes)
+            self._output_buffer = sf.Buffer(self.obj_out_owner.num_channels, self._app._render_nframes)
             self._output_buffer.sample_rate = self._app.fps
             # set target synth's buffer player to the new buffer
             self.obj_out["buffer_player"].set_buffer("buffer", self._output_buffer)
@@ -588,15 +588,32 @@ class Mapper():
     #         self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
 
     def map(self, frame=None):
-        # scale the input buffer to the output buffer
-        scaled_val = scale_array_exp(
-            self.buf_in.data,
-            self.in_low,
-            self.in_high,
-            self.out_low,
-            self.out_high,
-            self.exponent
-        )
+        if self.buf_in.data.shape[0] != self.obj_out_owner.num_channels:
+            in_data = resize_interp(self.buf_in.data.flatten(), self.obj_out_owner.num_channels)
+            in_data = in_data.reshape(self.obj_out_owner.num_channels, 1)
+            in_low = resize_interp(self.in_low.flatten(), self.obj_out_owner.num_channels)
+            in_low = in_low.reshape(self.obj_out_owner.num_channels, 1)
+            in_high = resize_interp(self.in_high.flatten(), self.obj_out_owner.num_channels)
+            in_high = in_high.reshape(self.obj_out_owner.num_channels, 1)
+            scaled_val = scale_array_exp(
+                in_data,
+                in_low,
+                in_high,
+                self.out_low,
+                self.out_high,
+                self.exponent
+            ) # shape: (num_features, 1)
+        else:
+            # scale the input buffer to the output buffer
+            scaled_val = scale_array_exp(
+                self.buf_in.data,
+                self.in_low,
+                self.in_high,
+                self.out_low,
+                self.out_high,
+                self.exponent
+            ) # shape: (num_features, 1)
+
         if self.clamp:
             scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
 
@@ -607,7 +624,7 @@ class Mapper():
                 from_slider=False
             )
         else:
-            self._output_buffer.data[0][frame] = scaled_val
+            self._output_buffer.data[:, frame] = scaled_val[:, 0]
 
     def __call__(self, frame=None):
         self.map(frame)
