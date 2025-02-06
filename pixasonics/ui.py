@@ -1,4 +1,5 @@
-from ipywidgets import Label, Layout, Box, VBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text
+from ipycanvas import Canvas, hold_canvas
+from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons
 from math import log10
 from .utils import array2str
 
@@ -284,7 +285,7 @@ class SynthCard():
                 # if the param has the 'scale' key, use it to scale the slider
                 if param['scale'] == 'log':
                     param_slider = FloatLogSlider(
-                        value=param['default'],
+                        value=param['default'][0],
                         base=10,
                         min=log10(param['min']),
                         max=log10(param['max']),
@@ -295,7 +296,7 @@ class SynthCard():
                     )
                 elif param['scale'] == 'linear':
                     param_slider = FloatSlider(
-                        value=param['default'],
+                        value=param['default'][0],
                         min=param['min'],
                         max=param['max'],
                         step=0.01,
@@ -355,6 +356,242 @@ class SynthCard():
                 padding='5px',
                 margin='5px'))
         self.card.tag = f"synth_{self.id}"
+
+
+class ADSRCanvas():
+    def __init__(self, width=200, height=100, parent_ui=None):
+        self.width = width
+        self.height = height
+        self.parent_ui = parent_ui
+        self.canvas = Canvas(width=width, height=height)
+        self.draw()
+
+    def __call__(self):
+        return self.canvas
+
+    @property
+    def attack(self):
+        return self.parent_ui.attack if self.parent_ui is not None else 1
+
+    @property
+    def decay(self):
+        return self.parent_ui.decay if self.parent_ui is not None else 1
+
+    @property
+    def sustain(self):
+        return self.parent_ui.sustain if self.parent_ui is not None else 1
+
+    @property
+    def release(self):
+        return self.parent_ui.release if self.parent_ui is not None else 1
+
+    def draw(self):
+        total_length = self.attack + self.decay + self.release
+        length_coeff = self.width / total_length
+        with hold_canvas(self.canvas):
+            self.canvas.clear()
+            self.canvas.stroke_style = "black"
+            self.canvas.line_width = 2
+            self.canvas.begin_path()
+            # move to the bottom left corner
+            self.canvas.move_to(0, self.height)
+            # draw the attack
+            self.canvas.line_to(self.attack * length_coeff, 0)
+            # draw the decay
+            self.canvas.line_to((self.attack + self.decay) * length_coeff, (1 - self.sustain) * self.height)
+            # draw the release
+            self.canvas.line_to(self.width, self.height)
+            self.canvas.stroke()
+            # put a red circle at each break-point
+            self.canvas.stroke_style = "red"
+            # at attack point
+            self.canvas.stroke_circle(0, self.height, 3)
+            # at decay point
+            self.canvas.stroke_circle(self.attack * length_coeff, 0, 3)
+            # at sustain point
+            self.canvas.stroke_circle((self.attack + self.decay) * length_coeff, (1 - self.sustain) * self.height, 3)
+            # at release point
+            self.canvas.stroke_circle(self.width, self.height, 3)
+
+
+class EnvelopeCard():
+    def __init__(
+            self,
+            name: str = "Envelope", 
+            id: str = "# ID",
+            params: dict = {},
+    ):
+        self.name = name
+        self.id = id
+        self.params = params
+        self.app = None
+        self.envelope = None
+
+        # private attributes
+        self._attack = Model(params["attack"]["default"])
+        self._decay = Model(params["decay"]["default"])
+        self._sustain = Model(params["sustain"]["default"])
+        self._release = Model(params["release"]["default"])
+
+        self.create_ui()
+        self.update()
+
+    @property
+    def attack(self):
+        return self._attack.value
+    
+    @attack.setter
+    def attack(self, value):
+        self._attack.value = value
+        self.update()
+
+    @property
+    def decay(self):
+        return self._decay.value
+    
+    @decay.setter
+    def decay(self, value):
+        self._decay.value = value
+        self.update()
+
+    @property
+    def sustain(self):
+        return self._sustain.value
+
+    @sustain.setter
+    def sustain(self, value):
+        self._sustain.value = value
+        self.update()
+
+    @property
+    def release(self):
+        return self._release.value
+    
+    @release.setter
+    def release(self, value):
+        self._release.value = value
+        self.update()
+
+    def update_duration(self):
+        duration = find_widget_by_tag(self.card, "duration")
+        duration.value = round(self.attack + self.decay + self.release, 4)
+
+    def update(self):
+        if self.envelope is not None:
+            self.envelope.set_param_from_ui("attack", self.attack)
+            self.envelope.set_param_from_ui("decay", self.decay)
+            self.envelope.set_param_from_ui("sustain", self.sustain)
+            self.envelope.set_param_from_ui("release", self.release)
+        self.update_duration()
+        self.canvas.draw()
+
+    def __call__(self):
+        return self.card
+    
+    def create_ui(self):
+        self.create_card()
+        self.bind_models()
+
+    def bind_models(self):
+        attack = find_widget_by_tag(self.card, "attack")
+        self._attack.bind_widget(attack, extra_callback=self.update)
+
+        decay = find_widget_by_tag(self.card, "decay")
+        self._decay.bind_widget(decay, extra_callback=self.update)
+
+        sustain = find_widget_by_tag(self.card, "sustain")
+        self._sustain.bind_widget(sustain, extra_callback=self.update)
+
+        release = find_widget_by_tag(self.card, "release")
+        self._release.bind_widget(release, extra_callback=self.update)
+
+    
+    def create_card(self):
+        envelope_label = Label(
+            value=self.name, 
+            style=dict(
+                font_weight='bold',
+                font_size='14px'))
+
+        envelope_id = Label(
+            value="#" + self.id, 
+            style=dict(
+                font_weight='bold',
+                font_size='10px',
+                text_color='gray'))
+
+        top_block = Box(
+            [envelope_label, envelope_id], 
+            layout=Layout(
+                justify_content='space-between'))
+
+        param_boxes = []
+        for param, param_dict in self.params.items():
+            value = param_dict["default"]
+            param_label = Label(value=param.capitalize())
+            param_numbox = BoundedFloatText(
+                value=value,
+                step=param_dict["step"],
+                min=param_dict["min"],
+                max=param_dict["max"],
+                layout=Layout(width='90%'),
+)
+            param_numbox.tag = param
+            param_box = VBox(
+                [param_label, param_numbox], 
+                layout=Layout(
+                    justify_content='space-between',
+                    height='100%'
+                    )
+            )
+            param_boxes.append(param_box)
+        params_display = HBox(
+            param_boxes,
+            layout=Layout(
+                justify_content='space-between',
+                width='100%'
+            )
+        )
+        self.canvas = ADSRCanvas(500, 100, self)
+        self.canvas.tag = "canvas"
+        canvas_wrapper = VBox(
+            [self.canvas()],
+            layout=Layout(
+                justify_content='center',
+                width='100%',
+                padding='4px'
+            )
+        )
+
+        duration_label = Label(value="Duration:")
+        duration_value = FloatText(
+            value=0,
+            disabled=True,
+            layout=Layout(width='auto'))
+        duration_value.tag = "duration"
+        duration_box = HBox(
+            [duration_label, duration_value], 
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%'
+            )
+        )
+
+        self.card = VBox(
+            [top_block, params_display, canvas_wrapper, duration_box],
+            layout=Layout(
+                justify_content='space-between',
+                border='1px solid black',
+                min_width='280px',
+                max_width='500px',
+                width='90%',
+                min_height='210px',
+                max_height='400px',
+                height='210px',
+                margin='5px',
+                padding='5px'
+            )
+        )
         
 
 class ProbeSettings():
@@ -366,36 +603,103 @@ class ProbeSettings():
 
     def create_ui(self):
         probe_w_label = Label(value="Probe Width:")
-        probe_w_slider = IntSlider(value=50, min=1, max=500, step=1)
+        probe_w_slider = IntSlider(
+            value=50, 
+            min=1, 
+            max=500, 
+            step=1,
+            layout=Layout(width='70%')
+            )
         probe_w_slider.tag = "probe_w_slider"
         probe_w_box = Box(
             [probe_w_label, probe_w_slider], 
             layout=Layout(
+                width='100%',
                 justify_content='space-around', 
                 align_items='flex-start', 
-                flex_flow='column',
+                flex_flow='row',
                 padding='5px'))
 
         probe_h_label = Label(value="Probe Height:")
-        probe_h_slider = IntSlider(value=50, min=1, max=500, step=1)
+        probe_h_slider = IntSlider(
+            value=50, 
+            min=1, 
+            max=500, 
+            step=1,
+            layout=Layout(width='70%')
+            )
         probe_h_slider.tag = "probe_h_slider"
         probe_h_box = Box(
             [probe_h_label, probe_h_slider], 
             layout=Layout(
+                width='100%',
                 justify_content='space-around', 
                 align_items='flex-start', 
-                flex_flow='column',
+                flex_flow='row',
                 padding='5px'))
-
-        self.box = Box(
-            [probe_w_box, probe_h_box], 
+        
+        interaction_mode_label = Label(value="Interaction Mode:")
+        interaction_mode_buttons = ToggleButtons(
+            options=['Hold', 'Toggle'],
+            value='Hold',
+            button_style='',
+            tooltips=['Sound while mouse down', 'Click to start sound, click again to stop'],
+            layout=Layout(padding='0px 0px 0px 10px'),
+            style=dict(
+                button_width='70px')
+        )
+        interaction_mode_buttons.tag = "interaction_mode_buttons"
+        interaction_mode_box = Box(
+            [interaction_mode_label, interaction_mode_buttons],
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='row',
+                padding='5px'))
+        
+        probe_x_label = Label(value="Probe X:")
+        probe_x_value = IntText(
+            value=0, 
+            disabled=True,
+            layout=Layout(width='90%')
+            )
+        probe_x_value.tag = "probe_x"
+        probe_x_box = VBox(
+            [probe_x_label, probe_x_value],
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
                 flex_flow='column',
-                # border='2px solid black',
-                # padding='5px',
-                # margin='5px'
+                padding='5px'))
+        
+        probe_y_label = Label(value="Probe Y:")
+        probe_y_value = IntText(
+            value=0, 
+            disabled=True,
+            layout=Layout(width='90%')
+            )
+        probe_y_value.tag = "probe_y"
+        probe_y_box = VBox(
+            [probe_y_label, probe_y_value],
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='column',
+                padding='5px'))
+        
+        probe_xy_box = HBox(
+            [probe_x_box, probe_y_box],
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='row'))
+
+        self.box = Box(
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_xy_box], 
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='column',
                 ))
 
 
@@ -414,7 +718,7 @@ class AudioSettings():
             icon='volume-up',
             layout=Layout(
                 width='auto', 
-                max_width='100px',
+                max_width='90px',
                 height='auto')
         )
         audio_switch.tag = "audio_switch"
@@ -427,28 +731,37 @@ class AudioSettings():
             max=0,
             step=0.01,
             orientation='horizontal',
-            layout=Layout(width='100%', height='auto')
+            layout=Layout(width='90%', height='auto')
         )
         master_volume_slider.tag = "master_volume_slider"
 
         master_volume_box = Box(
             [master_volume_label, master_volume_slider],
             layout=Layout(
+                width='70%',
                 justify_content='space-around', 
                 align_items='flex-start', 
                 flex_flow='column',
                 padding='5px'))
 
-        self.box = GridBox(
+        self.master_box = Box(
             children=[audio_switch, master_volume_box],
             layout=Layout(
-                width='auto', 
-                grid_template_columns='auto auto', 
-                grid_template_rows='auto',
-                # border='2px solid black',
-                # padding='5px',
-                # margin='5px'
+                width='100%', 
+                # grid_template_columns='auto auto', 
+                # grid_template_rows='auto',
+                justify_content='space-between',
+                max_height='80px'
                 ))
+        
+        self.box = VBox(
+            [self.master_box], 
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='column',
+                ))
+        self.box.tag = "audio_settings"
 
 
 class AppUI():
@@ -489,12 +802,12 @@ class AppUI():
 
         app_settings = Accordion(
             children=[
-                probe_settings(), 
                 audio_settings(),
+                probe_settings(), 
                 features_carousel, 
                 synths_carousel, 
                 mappers_carousel],
-            titles=('Probe', 'Audio', "Features", "Synths", "Mappers"),
+            titles=('Audio Settings', 'Image Probe Settings', "Image Features", "Synths", "Mappers"),
             layout=Layout(width='400px', min_width='300px', max_width='400px'))
         app_settings.tag = "app_settings"
 
@@ -504,7 +817,7 @@ class AppUI():
                 overflow='scroll',
                 # border='3px solid black',
                 padding='5px',
-                max_height='500px',))
+                max_height='600px',))
 
         self.box = Box(
             [app_canvas, app_settings_container], 

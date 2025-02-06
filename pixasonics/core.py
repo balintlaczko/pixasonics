@@ -1,7 +1,7 @@
 from .features import Feature
-from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp
+from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp, samps2mix
 from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
-from .utils import samps2mix
+from .synths import Envelope
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
 import time
@@ -34,8 +34,10 @@ class App():
         self._mouse_btn = 0
         self._probe_width = Model(50)
         self._probe_height = Model(50)
+        self._interaction_mode = Model("Hold")
         self._master_volume = Model(0)
         self._audio = Model(0)
+        self._unmuted = False
         self._nrt = nrt
 
         # Containers for features, mappers, and synths
@@ -93,7 +95,11 @@ class App():
     @mouse_btn.setter
     def mouse_btn(self, value):
         self._mouse_btn = value
-        self.enable_dsp(True) if value > 0 else self.enable_dsp(False)
+        if self.interaction_mode == "Hold":
+            self.unmuted = value > 0
+        elif self.interaction_mode == "Toggle" and value > 0:
+            self.unmuted = not self.unmuted
+        # self.enable_dsp(True) if value > 0 else self.enable_dsp(False)
 
     @property
     def probe_width(self):
@@ -131,6 +137,30 @@ class App():
     def audio(self, value):
         self._audio.value = value
 
+    @property
+    def unmuted(self):
+        return self._unmuted
+    
+    @unmuted.setter
+    def unmuted(self, value):
+        self._unmuted = value
+        if value:
+            self.master_envelope.on()
+        else:
+            self.master_envelope.off()
+
+    def enable_dsp(self, state: bool):
+        # self.dsp_switch_buf.data[0][0] = 1 if state else 0
+        self.master_envelope.on() if state else self.master_envelope.off()
+
+    @property
+    def interaction_mode(self):
+        return self._interaction_mode.value
+    
+    @interaction_mode.setter
+    def interaction_mode(self, value):
+        self._interaction_mode.value = value.capitalize()
+    
 
     def create_ui(self):
         probe_settings = ProbeSettings()
@@ -156,6 +186,9 @@ class App():
         self._probe_width.bind_widget(probe_w_slider, extra_callback=self.update_probe_xy)
         probe_h_slider = find_widget_by_tag(self.ui, "probe_h_slider")
         self._probe_height.bind_widget(probe_h_slider, extra_callback=self.update_probe_xy)
+        # An the interaction mode buttons
+        interaction_mode_buttons = find_widget_by_tag(self.ui, "interaction_mode_buttons")
+        self._interaction_mode.bind_widget(interaction_mode_buttons)
 
         # Bind the audio toggle and master volume to the widgets
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
@@ -171,17 +204,12 @@ class App():
     def create_audio_graph(self):
         self.graph = sf.AudioGraph.get_shared_graph()
         output_device = sf.AudioOut_Dummy(2) if self.nrt else None
-        if self.graph is None:
-            self.graph = sf.AudioGraph(
-                start=self.nrt,
-                output_device=output_device
-                )
-        else:
+        if self.graph is not None:
             self.graph.destroy()
-            self.graph = sf.AudioGraph(
-                start=self.nrt,
-                output_device=output_device
-                )
+        self.graph = sf.AudioGraph(
+            start=self.nrt,
+            output_device=output_device
+            )
 
         # DSP switch
         self.dsp_switch_buf = sf.Buffer(1, 1)
@@ -191,11 +219,34 @@ class App():
         # Master volume
         self.master_slider_db = sf.Constant(0)
         self.master_slider_a = sf.DecibelsToAmplitude(self.master_slider_db)
-        self.master_volume_smooth = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
+        # self.master_volume_smooth = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
+        self.master_volume_smooth = sf.Smooth(self.master_slider_a, samps2mix(24000))
+
+        # Master envelope
+        # self.master_envelope = sf.ADSREnvelope(
+        #     attack=0.05,
+        #     decay=0,
+        #     sustain=1,
+        #     release=0.05,
+        #     gate=self.dsp_switch
+        # )
+
+        self.master_envelope = Envelope(
+            attack=0.1,
+            decay=0.01,
+            sustain=1,
+            release=0.1,
+        )
+        self.master_envelope_bus = sf.Bus(1)
+        self.master_envelope_bus.add_input(self.master_envelope.output)
+        # add ui to the app ui
+        audio_settings = find_widget_by_tag(self.ui, "audio_settings")
+        # always keep the first child only, and replace the rest with this env ui
+        audio_settings.children = [audio_settings.children[0], self.master_envelope.ui]
 
         # Main bus
         self.bus = sf.Bus(num_channels=2)
-        self.audio_out = self.bus * self.master_volume_smooth
+        self.audio_out = self.bus * self.master_volume_smooth * self.master_envelope_bus
 
         # Check if HW has 2 channels
         if self.graph.num_output_channels < 2:
@@ -208,13 +259,13 @@ class App():
         # Connect the audio graph
         self.audio_out.play()
 
+        # in NRT mode, unmute the global envelope
+        if self.nrt:
+            self.master_envelope.on()
+
         # start graph if audio is enabled
         if self.audio > 0 and not self.nrt:
             self.graph.start()
-
-
-    def enable_dsp(self, state: bool):
-        self.dsp_switch_buf.data[0][0] = 1 if state else 0
 
     
     def attach_synth(self, synth):
@@ -404,19 +455,27 @@ class App():
         self.compute_features(probe_mat)
 
         # Update mappings
-        if self.mouse_btn > 0:
+        # if self.mouse_btn > 0:
+        if self.unmuted:
             self.compute_mappers()
 
         # Clear the canvas
         self.canvas[1].clear()
 
         # Put the probe rectangle to the canvas
-        self.canvas[1].stroke_style = 'red' if self.mouse_btn > 0 else 'yellow'
+        # self.canvas[1].stroke_style = 'red' if self.mouse_btn > 0 else 'yellow'
+        self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
         self.canvas[1].stroke_rect(
             int(self.probe_x - self.probe_width//2), 
             int(self.probe_y - self.probe_height//2), 
             int(self.probe_width), 
             int(self.probe_height))
+        
+        # update the probe_x and probe_y values in the UI
+        probe_x_numbox = find_widget_by_tag(self.ui, "probe_x")
+        probe_x_numbox.value = self.probe_x
+        probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
+        probe_y_numbox.value = self.probe_y
 
         # # Put the probe to the canvas
         # probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8

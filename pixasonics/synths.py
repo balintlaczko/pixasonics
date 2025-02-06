@@ -1,12 +1,11 @@
 import numpy as np
 import signalflow as sf
 from .utils import samps2mix, broadcast_params, array2str
-from .ui import SynthCard, find_widget_by_tag
+from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
 class Theremin(sf.Patch):
     def __init__(self, frequency=440, amplitude=0.5, panning=0):
         super().__init__()
-        self.input_buffers = {}
         self.params = {
             "frequency": {
                 "min": 60,
@@ -48,7 +47,6 @@ class Theremin(sf.Patch):
         self.frequency, self.amplitude, self.panning = broadcast_params(frequency, amplitude, panning)
         self.num_channels = len(self.frequency) # at this point all lengths are the same
         print(f"Theremin with {self.num_channels} channels")
-        self.smooth_n_samps = 24000
 
         self.frequency_buffer = sf.Buffer(self.num_channels, 1)
         self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
@@ -73,9 +71,17 @@ class Theremin(sf.Patch):
         self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
         self.params["panning"]["buffer_player"] = self.panning_value
         
-        freq_smooth = sf.Smooth(self.frequency_value, samps2mix(self.smooth_n_samps))
-        amplitude_smooth = sf.Smooth(self.amplitude_value, samps2mix(self.smooth_n_samps))
-        panning_smooth = sf.Smooth(self.panning_value, samps2mix(self.smooth_n_samps)) # still between -1 and 1
+        # smooth_time = 0.05
+        self.smooth_n_samps = 24000
+        mix_val = samps2mix(self.smooth_n_samps)
+        graph = sf.AudioGraph.get_shared_graph()
+        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
+        freq_smooth = sf.Smooth(self.frequency_value, mix_val)
+        # freq_smooth = LinearSmooth(self.frequency_value, smooth_time=smooth_time)
+        amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
+        # amplitude_smooth = LinearSmooth(self.amplitude_value, smooth_time=smooth_time)
+        panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
+        # panning_smooth = LinearSmooth(self.panning_value, smooth_time=smooth_time)
         
         sine = sf.SineOscillator(freq_smooth)
         # output = sf.StereoPanner(sine * amplitude_smooth, pan=panning_smooth)
@@ -109,16 +115,6 @@ class Theremin(sf.Patch):
             num_channels=self.num_channels
         )
         self._ui.synth = self
-        # # set up slider callbacks
-        # for param in self.params:
-        #     slider = find_widget_by_tag(self.ui, param)
-        #     slider.observe(
-        #         lambda change: self.set_input_buf(
-        #             change["owner"].tag, 
-        #             change["new"],
-        #             from_slider=True
-        #         ), 
-        #         names="value")
 
     @property
     def ui(self):
@@ -126,6 +122,136 @@ class Theremin(sf.Patch):
     
     def __repr__(self):
         return f"Theremin {self.id}"
+    
+
+class Envelope(sf.Patch):
+    def __init__(self, attack=0.01, decay=0.01, sustain=0.5, release=0.1):
+        super().__init__()
+        self.params = {
+            "attack": {
+                "min": 0.001,
+                "max": 3600,
+                "default": 0.01,
+                "step" : 0.01,
+                "param_name": "attack"
+            },
+            "decay": {
+                "min": 0.001,
+                "max": 3600,
+                "default": 0.01,
+                "step" : 0.01,
+                "param_name": "decay"
+            },
+            "sustain": {
+                "min": 0,
+                "max": 1,
+                "default": 0.5,
+                "step": 0.1,
+                "param_name": "sustain"
+            },
+            "release": {
+                "min": 0.001,
+                "max": 3600,
+                "default": 0.1,
+                "step" : 0.1,
+                "param_name": "release"
+            }
+        }
+        self.params["attack"]["default"] = attack
+        self.params["decay"]["default"] = decay
+        self.params["sustain"]["default"] = sustain
+        self.params["release"]["default"] = release
+
+        for param in self.params.keys():
+            self.params[param]["value"] = self.params[param]["default"]
+
+        gate = self.add_input("gate", 0)
+        attack = self.add_input("attack", self.params["attack"]["default"])
+        decay = self.add_input("decay", self.params["decay"]["default"])
+        sustain = self.add_input("sustain", self.params["sustain"]["default"])
+        release = self.add_input("release", self.params["release"]["default"])
+
+        adsr = sf.ADSREnvelope(
+            attack=attack,
+            decay=decay,
+            sustain=sustain,
+            release=release,
+            gate=gate
+        )
+
+        asr = sf.ASREnvelope(
+            attack=attack,
+            sustain=sustain,
+            release=release,
+            clock=0
+        )
+
+        self.set_trigger_node(asr)
+        self.set_output(adsr + asr)
+
+        self.id = str(id(self))
+        self.create_ui()
+
+    def on(self):
+        self.set_input("gate", 1)
+
+    def off(self):
+        self.set_input("gate", 0)
+
+    def __getitem__(self, key):
+        return self.params[key]
+    
+    def create_ui(self):
+        self._ui = EnvelopeCard("Envelope", self.id, self.params)
+        self._ui.envelope = self
+
+    @property
+    def ui(self):
+        return self._ui()
+    
+    def set_param_from_ui(self, param_name, value):
+        self.params[param_name]["value"] = value
+        self.set_input(param_name, value)
+    
+    @property
+    def attack(self):
+        return self.params["attack"]["value"]
+    
+    @attack.setter
+    def attack(self, value):
+        self.params["attack"]["value"] = value
+        self.set_input("attack", value)
+        self._ui.attack = value
+
+    @property
+    def decay(self):
+        return self.params["decay"]["value"]
+    
+    @decay.setter
+    def decay(self, value):
+        self.params["decay"]["value"] = value
+        self.set_input("decay", value)
+        self._ui.decay = value
+
+    @property
+    def sustain(self):
+        return self.params["sustain"]["value"]
+    
+    @sustain.setter
+    def sustain(self, value):
+        self.params["sustain"]["value"] = value
+        self.set_input("sustain", value)
+        self._ui.sustain = value
+
+    @property
+    def release(self):
+        return self.params["release"]["value"]
+    
+    @release.setter
+    def release(self, value):
+        self.params["release"]["value"] = value
+        self.set_input("release", value)
+        self._ui.release = value
 
 
 class Mixer(sf.Patch):
@@ -149,3 +275,29 @@ class UpMixer(sf.Patch):
         expanded_list = [sf.ChannelPanner(out_channels, upmixed_list[i], float(output_y[i])) for i in range(out_channels)]
         _out = sf.Sum(expanded_list)
         self.set_output(_out)
+
+
+class LinearSmooth(sf.Patch):
+    def __init__(self, input_sig, smooth_time=0.1):
+        super().__init__()
+        graph = sf.AudioGraph.get_shared_graph()
+        samps = graph.sample_rate * smooth_time
+        steps = samps / graph.output_buffer_size
+        steps = sf.If(steps < 1, 1, steps)
+
+        current_value_buf = sf.Buffer(1, graph.output_buffer_size)
+        current_value = sf.FeedbackBufferReader(current_value_buf)
+
+        history_buf = sf.Buffer(1, graph.output_buffer_size)
+        history = sf.FeedbackBufferReader(history_buf)
+
+        change = input_sig != history
+        target = sf.SampleAndHold(input_sig, change)
+        diff = sf.SampleAndHold(target - current_value, change)
+
+        increment = diff / steps
+
+        out = sf.If(sf.Abs(target - current_value) < sf.Abs(increment), target, current_value + increment)
+        graph.add_node(sf.HistoryBufferWriter(current_value_buf, out))
+        graph.add_node(sf.HistoryBufferWriter(history_buf, input_sig))
+        self.set_output(out)
