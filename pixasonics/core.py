@@ -26,7 +26,8 @@ class App():
         # Global state variables
         self.is_drawing = False
         self.last_draw_time = time.time()
-        self.bg_np = np.zeros(image_size + (3,), dtype=np.float32) # np.array(img, dtype=np.float32) / 255
+        self.bg_hires = np.zeros(image_size + (3,), dtype=np.float64) # np.array(img, dtype=np.float32) / 255
+        self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
 
         # Private properties
         self._probe_x = 0
@@ -39,6 +40,8 @@ class App():
         self._audio = Model(0)
         self._unmuted = False
         self._nrt = nrt
+        self._normalize_display = False
+        self._normalize_display_global = False
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -47,6 +50,32 @@ class App():
 
         self.create_ui()
         self.create_audio_graph()
+
+    @property
+    def normalize_display(self):
+        return self._normalize_display
+    
+    @normalize_display.setter
+    def normalize_display(self, value):
+        self._normalize_display = value
+        self.bg_display = self.convert_image_data_for_display(
+            self.bg_hires, 
+            normalize=self._normalize_display, 
+            global_normalize=self._normalize_display_global)
+        self.redraw_background()
+
+    @property
+    def normalize_display_global(self):
+        return self._normalize_display_global
+    
+    @normalize_display_global.setter
+    def normalize_display_global(self, value):
+        self._normalize_display_global = value
+        self.bg_display = self.convert_image_data_for_display(
+            self.bg_hires, 
+            normalize=self._normalize_display, 
+            global_normalize=self._normalize_display_global)
+        self.redraw_background()
 
     @property
     def nrt(self):
@@ -293,6 +322,7 @@ class App():
             features_carousel = find_widget_by_tag(self.ui, "features_carousel")
             features_carousel.children = list(features_carousel.children) + [feature.ui]
             feature._ui.app = self
+            feature.app = self
 
     def detach_feature(self, feature):
         print(f"Detaching {feature}")
@@ -329,21 +359,47 @@ class App():
             mapper(frame)
         
 
-    def load_image(self, image_path):
+    def load_image_file(self, image_path):
         img = Image.open(image_path)
         img = img.resize(self.image_size)
-        self.bg_np = np.array(img, dtype=np.float32) / 255
+        self.bg_hires = np.array(img)
+        self.bg_display = self.convert_image_data_for_display(
+            self.bg_hires, 
+            normalize=self.normalize_display, 
+            global_normalize=self.normalize_display_global)
 
         # Put the image to the canvas
-        img_data = (self.bg_np * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        self.canvas[0].put_image_data(img_data, 0, 0)
+        # img_data = (self.bg_hires * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
+        # self.canvas[0].put_image_data(self.bg_display, 0, 0)
+        self.redraw_background()
+
+    def convert_image_data_for_display(self, img_data, normalize=False, global_normalize=False):
+        if normalize:
+            if global_normalize:
+                return ((img_data - img_data.min()) / (img_data.max() - img_data.min()) * 255).astype(np.uint8)
+            else:
+                # if 3D
+                if len(img_data.shape) == 3: # H, W, C
+                    return ((img_data - img_data.min(axis=(0, 1))) / (img_data.max(axis=(0, 1)) - img_data.min(axis=(0, 1))) * 255).astype(np.uint8)
+                # if 4D
+                elif len(img_data.shape) == 4: # H, W, C, L
+                    return ((img_data - img_data.min(axis=(0, 1, 3))) / (img_data.max(axis=(0, 1, 3)) - img_data.min(axis=(0, 1, 3))) * 255).astype(np.uint8)
+        # if not normalizing then divide by max value of the data type
+        if np.issubdtype(img_data.dtype, np.integer):
+            return (img_data / np.iinfo(img_data.dtype).max * 255).astype(np.uint8)
+        else:
+            return (img_data / np.finfo(img_data.dtype).max * 255).astype(np.uint8)
+        
+    
+    def redraw_background(self):
+        self.canvas[0].put_image_data(self.bg_display, 0, 0)
 
 
     def get_probe_matrix(self):
         """Get the probe matrix from the background image."""
         x_from = max(self.probe_x - self.probe_width//2, 0)
         y_from = max(self.probe_y - self.probe_height//2, 0)
-        probe = self.bg_np[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
+        probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         return probe
     
 
@@ -539,15 +595,6 @@ class Mapper():
         self.obj_in = obj_in
         self.obj_out = obj_out
 
-        # if the input object is an instance of a feature, then we want to map the output of the feature
-        # to the input of the object
-        if isinstance(self.obj_in, Feature):
-            self.buf_in = self.obj_in.features
-        elif isinstance(self.obj_in, dict):
-            self.buf_in = self.obj_in["buffer"]
-        else:
-            raise ValueError("Input object must be a Feature or a dict")
-
         # expecting a synth's param dict here
         # self.buf_out = self.obj_out["buffer"]
         self.obj_out_owner = self.obj_out["owner"]
@@ -571,6 +618,17 @@ class Mapper():
 
         self._nrt = False
         self._app = None
+
+    @property
+    def buf_in(self):
+        # if the input object is an instance of a feature, then we want to map the output of the feature
+        # to the input of the object
+        if isinstance(self.obj_in, Feature):
+            return self.obj_in.features
+        # elif isinstance(self.obj_in, dict):
+        #     self.buf_in = self.obj_in["buffer"]
+        else:
+            raise ValueError("Input object must be a Feature") # or a dict")
 
     @property
     def nrt(self):
@@ -647,7 +705,9 @@ class Mapper():
     #         self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
 
     def map(self, frame=None):
+        # print("Before mapping:", self.buf_in.data.shape, self.in_low.shape, self.in_high.shape)
         if self.buf_in.data.shape[0] != self.obj_out_owner.num_channels:
+            # print("Resizing input buffer, then mapping")
             in_data = resize_interp(self.buf_in.data.flatten(), self.obj_out_owner.num_channels)
             in_data = in_data.reshape(self.obj_out_owner.num_channels, 1)
             in_low = resize_interp(self.in_low.flatten(), self.obj_out_owner.num_channels)
@@ -663,6 +723,7 @@ class Mapper():
                 self.exponent
             ) # shape: (num_features, 1)
         else:
+            # print("Mapping without resizing")
             # scale the input buffer to the output buffer
             scaled_val = scale_array_exp(
                 self.buf_in.data,
@@ -674,9 +735,11 @@ class Mapper():
             ) # shape: (num_features, 1)
 
         if self.clamp:
+            # print(scaled_val.shape)
             scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
 
         if not self.nrt:
+            # print(scaled_val.shape)
             self.obj_out_owner.set_input_buf(
                 self.obj_out["param_name"],
                 scaled_val,

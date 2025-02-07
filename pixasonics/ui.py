@@ -65,12 +65,11 @@ class MapperCard():
             layout=Layout(justify_content='flex-end'))
         detach_btn.on_click(self.detach_callback)
 
-        self.card = GridBox(
+        self.card = VBox(
             children=[top_row, from_row, to_row, detach_row],
             layout=Layout(
-                width='auto', 
-                grid_template_columns='auto', 
-                grid_template_rows='1fr 0.8fr 1.6fr 1fr',
+                width='auto',
+                justify_content='flex-start',
                 max_width='260px',
                 min_height='140px',
                 border='1px solid black',
@@ -105,10 +104,10 @@ class FeatureCard():
         if self.app is not None and self.feature is not None:
             self.app.detach_feature(self.feature)
 
-    def reset_callback(self, b):
-        print("FeatureCard: resetting min max", self.id)
-        if self.feature is not None:
-            self.feature.reset_minmax()
+    # def reset_callback(self, b):
+    #     print("FeatureCard: resetting min max", self.id)
+    #     if self.feature is not None:
+    #         self.feature.reset_minmax()
 
     def create_ui(self):
         feature_label = Label(
@@ -181,12 +180,12 @@ class FeatureCard():
                 width='100%'))
 
 
-        reset_btn = Button(
-            description="Reset", 
-            button_style='warning', 
-            icon='refresh',
-            layout=Layout(max_width='80px'))
-        reset_btn.on_click(self.reset_callback)
+        # reset_btn = Button(
+        #     description="Reset", 
+        #     button_style='warning', 
+        #     icon='refresh',
+        #     layout=Layout(max_width='80px'))
+        # reset_btn.on_click(self.reset_callback)
 
         detach_btn = Button(
             description="Detach", 
@@ -196,10 +195,11 @@ class FeatureCard():
         detach_btn.on_click(self.detach_callback)
         
         btn_row = Box(
-            [reset_btn, detach_btn], 
+            # [reset_btn, detach_btn], 
+            [detach_btn], 
             layout=Layout(
                 width='100%',
-                justify_content='space-between'))
+                justify_content='flex-end'))
 
         self.card = Box(
             children=[top_block, min_block, max_block, value_block, btn_row],
@@ -814,7 +814,8 @@ class AppUI():
         app_settings_container = Box(
             [app_settings], 
             layout=Layout(
-                overflow='scroll',
+                overflow='hidden',
+                # overflow='scroll',
                 # border='3px solid black',
                 padding='5px',
                 max_height='600px',))
