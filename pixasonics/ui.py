@@ -1,5 +1,5 @@
 from ipycanvas import Canvas, hold_canvas
-from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons
+from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons, Checkbox
 from math import log10
 from .utils import array2str
 
@@ -764,23 +764,100 @@ class AudioSettings():
         self.box.tag = "audio_settings"
 
 
+class ImageSettings():
+    def __init__(self):
+        self.create_ui()
+
+    def __call__(self):
+        return self.box
+
+    def create_ui(self):
+        normalize_display = Checkbox(
+            value=False,
+            description='Normalize display',
+            tooltip='Normalize the image displayed on the canvas',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        normalize_display.tag = "normalize_display"
+
+        normalize_display_global = Checkbox(
+            value=False,
+            description='Global normalization',
+            tooltip='Use global min and max for normalization (otherwise use channel-wise min and max)',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        normalize_display_global.tag = "normalize_display_global"
+
+        normalize_box = HBox(
+            [normalize_display, normalize_display_global],
+            layout=Layout(
+                width='90%',
+                justify_content='space-around', 
+                align_items='flex-start', 
+                padding='5px'))
+        
+        channel_offset = IntSlider(
+            value=0,
+            min=0,
+            max=0,
+            step=1,
+            disabled=True,
+            description='Channel Offset:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        channel_offset.tag = "channel_offset"
+
+        layer_offset = IntSlider(
+            value=0,
+            min=0,
+            max=0,
+            step=1,
+            disabled=True,
+            description='Layer Offset:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        layer_offset.tag = "layer_offset"
+        
+        self.box = VBox(
+            [normalize_box, channel_offset, layer_offset], 
+            layout=Layout(
+                justify_content='space-around', 
+                align_items='flex-start', 
+                flex_flow='column',
+                ))
+        self.box.tag = "image_settings"
+
+
 class AppUI():
     def __init__(
             self,
-            probe_settings, 
             audio_settings,
+            image_settings,
+            probe_settings, 
             canvas_width=500,
             canvas_height=500, 
             ):
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        self.create_ui(probe_settings, audio_settings)
+        self.create_ui(audio_settings, image_settings, probe_settings)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self, probe_settings, audio_settings):
+    def create_ui(self, audio_settings, image_settings, probe_settings):
         features_carousel = VBox([])
         features_carousel.tag = "features_carousel"
         synths_carousel = VBox([])
@@ -803,11 +880,12 @@ class AppUI():
         app_settings = Accordion(
             children=[
                 audio_settings(),
+                image_settings(),
                 probe_settings(), 
                 features_carousel, 
                 synths_carousel, 
                 mappers_carousel],
-            titles=('Audio Settings', 'Image Probe Settings', "Image Features", "Synths", "Mappers"),
+            titles=('Audio Settings', 'Image Settings', 'Probe Settings', "Image Features", "Synths", "Mappers"),
             layout=Layout(width='400px', min_width='300px', max_width='400px'))
         app_settings.tag = "app_settings"
 

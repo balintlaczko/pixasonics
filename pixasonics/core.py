@@ -1,6 +1,6 @@
 from .features import Feature
 from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp, samps2mix
-from .ui import MapperCard, AppUI, ProbeSettings, AudioSettings, Model, find_widget_by_tag
+from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Envelope
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
@@ -40,8 +40,11 @@ class App():
         self._audio = Model(0)
         self._unmuted = False
         self._nrt = nrt
-        self._normalize_display = False
-        self._normalize_display_global = False
+        self._normalize_display = Model(False)
+        self._normalize_display_global = Model(False)
+        self._display_channel_offset = Model(0)
+        self._display_layer_offset = Model(0)
+        self._image_is_loaded = False
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -53,28 +56,38 @@ class App():
 
     @property
     def normalize_display(self):
-        return self._normalize_display
+        return self._normalize_display.value
     
     @normalize_display.setter
     def normalize_display(self, value):
-        self._normalize_display = value
-        self.bg_display = self.convert_image_data_for_display(
-            self.bg_hires, 
-            normalize=self._normalize_display, 
-            global_normalize=self._normalize_display_global)
+        self._normalize_display.value = value
         self.redraw_background()
 
     @property
     def normalize_display_global(self):
-        return self._normalize_display_global
+        return self._normalize_display_global.value
     
     @normalize_display_global.setter
     def normalize_display_global(self, value):
-        self._normalize_display_global = value
-        self.bg_display = self.convert_image_data_for_display(
-            self.bg_hires, 
-            normalize=self._normalize_display, 
-            global_normalize=self._normalize_display_global)
+        self._normalize_display_global.value = value
+        self.redraw_background()
+
+    @property
+    def display_channel_offset(self):
+        return self._display_channel_offset.value
+    
+    @display_channel_offset.setter
+    def display_channel_offset(self, value):
+        self._display_channel_offset.value = value
+        self.redraw_background()
+
+    @property
+    def display_layer_offset(self):
+        return self._display_layer_offset.value
+    
+    @display_layer_offset.setter
+    def display_layer_offset(self, value):
+        self._display_layer_offset.value = value
         self.redraw_background()
 
     @property
@@ -192,9 +205,10 @@ class App():
     
 
     def create_ui(self):
+        image_settings = ImageSettings()
         probe_settings = ProbeSettings()
         audio_settings = AudioSettings()
-        self.ui = AppUI(probe_settings, audio_settings)()
+        self.ui = AppUI(audio_settings, image_settings, probe_settings)()
         display(self.ui)
 
         # Create the canvas
@@ -209,6 +223,16 @@ class App():
         self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
+
+        # Bind image settings widgets
+        chkbox_normalize_display = find_widget_by_tag(self.ui, "normalize_display")
+        self._normalize_display.bind_widget(chkbox_normalize_display, extra_callback=self.redraw_background)
+        chkbox_normalize_display_global = find_widget_by_tag(self.ui, "normalize_display_global")
+        self._normalize_display_global.bind_widget(chkbox_normalize_display_global, extra_callback=self.redraw_background)
+        channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+        self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self.redraw_background)
+        layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+        self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self.redraw_background)
 
         # Bind the probe width and height to the sliders
         probe_w_slider = find_widget_by_tag(self.ui, "probe_w_slider")
@@ -361,19 +385,132 @@ class App():
 
     def load_image_file(self, image_path):
         img = Image.open(image_path)
-        img = img.resize(self.image_size)
-        self.bg_hires = np.array(img)
+        if img.size != self.image_size:
+            print("Resizing image to", self.image_size)
+            img = img.resize(self.image_size)
+        img = np.array(img)
+        if len(img.shape) == 2:
+            img = img[..., None] # add channel dimension if single-channel
+        print ("Image shape:", img.shape)
+        self.bg_hires = img
         self.bg_display = self.convert_image_data_for_display(
             self.bg_hires, 
             normalize=self.normalize_display, 
             global_normalize=self.normalize_display_global)
+        
+        self._image_is_loaded = True
+
+        # Set layer offset to 0 and disable the slider
+        self._display_layer_offset.value = 0
+        layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+        layer_offset_slider.disabled = True
+        layer_offset_slider.max = 0
+
+        # Set the channel offset to 0 and disable the slider
+        self._display_channel_offset.value = 0
+        channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+        channel_offset_slider.disabled = True
+        channel_offset_slider.max = 0
 
         # Put the image to the canvas
         # img_data = (self.bg_hires * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
         # self.canvas[0].put_image_data(self.bg_display, 0, 0)
         self.redraw_background()
 
-    def convert_image_data_for_display(self, img_data, normalize=False, global_normalize=False):
+        # re-trigger image processing in already attached features
+        for feature in self.features:
+            feature.app = self
+
+
+    def load_image_data(self, img_data):
+        if img_data.shape[0:2] != self.image_size:
+            print("Resizing image data to", self.image_size)
+            img_data = self.resize_image_data(img_data)
+        self.bg_hires = img_data
+        self.bg_display = self.convert_image_data_for_display(
+            self.bg_hires, 
+            normalize=self.normalize_display, 
+            global_normalize=self.normalize_display_global)
+        
+        self._image_is_loaded = True
+
+        # Set layer offset to 0, enable the slider, and set the max value
+        if len(self.bg_hires.shape) == 4 and self.bg_hires.shape[3] > 1:
+            self._display_layer_offset.value = 0
+            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+            layer_offset_slider.disabled = False
+            layer_offset_slider.max = self.bg_hires.shape[-1] - 1
+        else:
+            self._display_layer_offset.value = 0
+            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+            layer_offset_slider.disabled = True
+            layer_offset_slider.max = 0
+
+        # Set the channel offset to 0, enable the slider, and set the max value
+        if self.bg_hires.shape[2] > 3:
+            self._display_channel_offset.value = 0
+            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+            channel_offset_slider.disabled = False
+            channel_offset_slider.max = self.bg_hires.shape[2] - 3
+        else:
+            self._display_channel_offset.value = 0
+            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+            channel_offset_slider.disabled = True
+            channel_offset_slider.max = 0
+
+        self.redraw_background()
+
+        # re-trigger image processing in already attached features
+        for feature in self.features:
+            feature.app = self
+
+    
+    def resize_image_data(self, img_data):
+        # if 3D, add a layer dimension
+        if len(img_data.shape) == 3:
+            img_data = img_data[..., None]
+        # loop through the layers and resize each one
+        img_data_resized = np.zeros(self.image_size + img_data.shape[2:], dtype=img_data.dtype)
+        for i in range(img_data.shape[3]):
+            # print(f"Resizing layer {i}")
+            layer = img_data[:, :, :, i]
+            resized_layer = np.zeros(self.image_size + (layer.shape[2],), dtype=img_data.dtype)
+            for j in range(layer.shape[2]):
+                # print(f"Resizing channel {j}")
+                img = Image.fromarray(layer[:, :, j])
+                resized_layer[:, :, j] = np.array(img.resize(self.image_size))
+            img_data_resized[:, :, :, i] = resized_layer
+        return img_data_resized
+
+
+    def convert_image_data_for_display(
+            self, 
+            img_data, 
+            normalize=False, 
+            global_normalize=False,
+            channel_offset=0,
+            layer_offset=0
+            ):
+        img = self.rescale_image_data_for_display(
+            img_data, 
+            normalize=normalize, 
+            global_normalize=global_normalize)
+        # if 4D, slice the layer according to the layer offset
+        if len(img.shape) == 4:
+            img = img[:, :, :, layer_offset]
+        # if single channel, repeat to 3 channels
+        if img.shape[2] == 1:
+            img = np.repeat(img, 3, axis=2)
+        # if two channels, add a third empty channel
+        elif img.shape[2] == 2:
+            img = np.concatenate([img, np.zeros(img.shape[:2] + (1,), dtype=img.dtype)], axis=2)
+        # if more than 3 channels, slice 3 channels according to the channel offset
+        elif img.shape[2] > 3:
+            img = img[:, :, channel_offset:channel_offset+3]
+        return img
+
+
+    def rescale_image_data_for_display(self, img_data, normalize=False, global_normalize=False):
         if normalize:
             if global_normalize:
                 return ((img_data - img_data.min()) / (img_data.max() - img_data.min()) * 255).astype(np.uint8)
@@ -383,7 +520,9 @@ class App():
                     return ((img_data - img_data.min(axis=(0, 1))) / (img_data.max(axis=(0, 1)) - img_data.min(axis=(0, 1))) * 255).astype(np.uint8)
                 # if 4D
                 elif len(img_data.shape) == 4: # H, W, C, L
-                    return ((img_data - img_data.min(axis=(0, 1, 3))) / (img_data.max(axis=(0, 1, 3)) - img_data.min(axis=(0, 1, 3))) * 255).astype(np.uint8)
+                    img_min = img_data.min(axis=(0, 1, 3))[..., None] # reduce H, W, L
+                    img_max = img_data.max(axis=(0, 1, 3))[..., None]
+                    return ((img_data - img_min) / (img_max - img_min) * 255).astype(np.uint8)
         # if not normalizing then divide by max value of the data type
         if np.issubdtype(img_data.dtype, np.integer):
             return (img_data / np.iinfo(img_data.dtype).max * 255).astype(np.uint8)
@@ -392,6 +531,15 @@ class App():
         
     
     def redraw_background(self):
+        if not self._image_is_loaded:
+            return
+        self.bg_display = self.convert_image_data_for_display(
+            self.bg_hires, 
+            normalize=self._normalize_display.value, 
+            global_normalize=self._normalize_display_global.value,
+            channel_offset=self.display_channel_offset,
+            layer_offset=self.display_layer_offset
+            )
         self.canvas[0].put_image_data(self.bg_display, 0, 0)
 
 
