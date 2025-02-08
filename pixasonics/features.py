@@ -157,16 +157,542 @@ class Feature():
         self.update_ui()
 
 
-# class MeanPixelValue(Feature):
-#     """Compute the mean pixel value within a probe."""
-#     def __init__(self, selected_channels=None):
-#         super().__init__(selected_channels=selected_channels, name="Mean Pixel Value")
+# Channel-based abstractions
 
-#     def compute(self, mat):
-#         # if 3D
-#         if len(mat.shape) == 3:
-#             return np.mean(mat, axis=(0, 1))[..., None]
-#         elif len(mat.shape) == 4:
-#             return np.mean(mat, axis=(0, 1, 3))[..., None]
-#         else:
-#             raise ValueError("Input must be 3D or 4D")
+class MeanChannelValue(Feature):
+    """Compute the mean channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MeanChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="mean",
+            name=name
+        )
+
+class MedianChannelValue(Feature):
+    """Compute the median channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MedianChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="median",
+            name=name
+        )
+
+class MaxChannelValue(Feature):
+    """Compute the max channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MaxChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="max",
+            name=name
+        )
+
+class MinChannelValue(Feature):
+    """Compute the min channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MinChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="min",
+            name=name
+        )
+
+class SumChannelValue(Feature):
+    """Compute the sum channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="SumChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="sum",
+            name=name
+        )
+
+class StdChannelValue(Feature):
+    """Compute the std channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="StdChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="std",
+            name=name
+        )
+
+class VarChannelValue(Feature):
+    """Compute the var channel value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="VarChannelValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=2, # channel dim
+            reduce_method="var",
+            name=name
+        )
+
+# Layer-based abstractions
+
+class MeanLayerValue(Feature):
+    """Compute the mean layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MeanLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="mean",
+            name=name
+        )
+
+class MedianLayerValue(Feature):
+    """Compute the median layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MedianLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="median",
+            name=name
+        )
+
+class MaxLayerValue(Feature):
+    """Compute the max layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MaxLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="max",
+            name=name
+        )
+
+class MinLayerValue(Feature):
+    """Compute the min layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MinLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="min",
+            name=name
+        )
+
+class SumLayerValue(Feature):
+    """Compute the sum layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="SumLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="sum",
+            name=name
+        )
+
+class StdLayerValue(Feature):
+    """Compute the std layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="StdLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="std",
+            name=name
+        )
+
+class VarLayerValue(Feature):
+    """Compute the var layer value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="VarLayerValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=3, # layer dim
+            reduce_method="var",
+            name=name
+        )
+
+# Row-based abstractions
+
+class MeanRowValue(Feature):
+    """Compute the mean row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MeanRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="mean",
+            name=name
+        )
+
+class MedianRowValue(Feature):
+    """Compute the median row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MedianRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="median",
+            name=name
+        )
+
+class MaxRowValue(Feature):
+    """Compute the max row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MaxRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="max",
+            name=name
+        )
+
+class MinRowValue(Feature):
+    """Compute the min row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MinRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="min",
+            name=name
+        )
+
+class SumRowValue(Feature):
+    """Compute the sum row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="SumRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="sum",
+            name=name
+        )
+
+class StdRowValue(Feature):
+    """Compute the std row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="StdRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="std",
+            name=name
+        )
+
+class VarRowValue(Feature):
+    """Compute the var row value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="VarRowValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=0, # row dim
+            reduce_method="var",
+            name=name
+        )
+
+# Column-based abstractions
+
+class MeanColumnValue(Feature):
+    """Compute the mean column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MeanColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="mean",
+            name=name
+        )
+
+class MedianColumnValue(Feature):
+    """Compute the median column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MedianColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="median",
+            name=name
+        )
+
+class MaxColumnValue(Feature):
+    """Compute the max column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MaxColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="max",
+            name=name
+        )
+
+class MinColumnValue(Feature):
+    """Compute the min column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="MinColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="min",
+            name=name
+        )
+
+class SumColumnValue(Feature):
+    """Compute the sum column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="SumColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="sum",
+            name=name
+        )
+
+class StdColumnValue(Feature):
+    """Compute the std column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="StdColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="std",
+            name=name
+        )
+
+class VarColumnValue(Feature):
+    """Compute the var column value within a probe."""
+    def __init__(
+            self, 
+            filter_rows=None,
+            filter_columns=None,
+            filter_channels=None,
+            filter_layers=None,
+            name="VarColumnValue"):
+        super().__init__(
+            filter_rows=filter_rows,
+            filter_columns=filter_columns,
+            filter_channels=filter_channels,
+            filter_layers=filter_layers,
+            target_dim=1, # column dim
+            reduce_method="var",
+            name=name
+        )
