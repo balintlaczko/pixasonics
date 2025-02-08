@@ -35,7 +35,9 @@ class App():
         self._mouse_btn = 0
         self._probe_width = Model(50)
         self._probe_height = Model(50)
+        self._probe_follows_idle_mouse = Model(True)
         self._interaction_mode = Model("Hold")
+        self._last_mouse_down_time = 0
         self._master_volume = Model(0)
         self._audio = Model(0)
         self._unmuted = False
@@ -102,6 +104,14 @@ class App():
             mapper.nrt = value
 
     @property
+    def probe_follows_idle_mouse(self):
+        return self._probe_follows_idle_mouse.value
+    
+    @probe_follows_idle_mouse.setter
+    def probe_follows_idle_mouse(self, value):
+        self._probe_follows_idle_mouse.value = value
+
+    @property
     def probe_x(self):
         return self._probe_x
     
@@ -139,7 +149,7 @@ class App():
         self._mouse_btn = value
         if self.interaction_mode == "Hold":
             self.unmuted = value > 0
-        elif self.interaction_mode == "Toggle" and value > 0:
+        elif self.interaction_mode == "Toggle" and value > 1: # double-click
             self.unmuted = not self.unmuted
         # self.enable_dsp(True) if value > 0 else self.enable_dsp(False)
 
@@ -223,6 +233,8 @@ class App():
         self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
+        # Canvas keyboard event listeners
+        # self.canvas.on_key_down(self.key_callback)
 
         # Bind image settings widgets
         chkbox_normalize_display = find_widget_by_tag(self.ui, "normalize_display")
@@ -234,14 +246,18 @@ class App():
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
         self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self.redraw_background)
 
-        # Bind the probe width and height to the sliders
+        # Bind the probe settings widgets
+        # Probe sliders
         probe_w_slider = find_widget_by_tag(self.ui, "probe_w_slider")
         self._probe_width.bind_widget(probe_w_slider, extra_callback=self.update_probe_xy)
         probe_h_slider = find_widget_by_tag(self.ui, "probe_h_slider")
         self._probe_height.bind_widget(probe_h_slider, extra_callback=self.update_probe_xy)
-        # An the interaction mode buttons
+        # Interaction mode buttons
         interaction_mode_buttons = find_widget_by_tag(self.ui, "interaction_mode_buttons")
         self._interaction_mode.bind_widget(interaction_mode_buttons)
+        # Follow idle mouse checkbox
+        chkbox_probe_follows_idle_mouse = find_widget_by_tag(self.ui, "probe_follows_idle_mouse")
+        self._probe_follows_idle_mouse.bind_widget(chkbox_probe_follows_idle_mouse)
 
         # Bind the audio toggle and master volume to the widgets
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
@@ -390,7 +406,9 @@ class App():
             img = img.resize(self.image_size)
         img = np.array(img)
         if len(img.shape) == 2:
-            img = img[..., None] # add channel dimension if single-channel
+            img = img[..., None, None] # add channel and layer dimensions if single-channel
+        elif len(img.shape) == 3:
+            img = img[..., None] # add layer dimension if 3-channel
         print ("Image shape:", img.shape)
         self.bg_hires = img
         self.bg_display = self.convert_image_data_for_display(
@@ -692,6 +710,9 @@ class App():
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
         if self._nrt:
             return # Skip if we are in non-real-time mode
+        
+        if not self.probe_follows_idle_mouse and pressed < 0 and self.mouse_btn == 0:
+            return # Skip if we are not following the idle mouse
 
         # Drop excess events over the refresh interval
         current_time = time.time()
@@ -700,14 +721,22 @@ class App():
         self.last_draw_time = current_time  # Update the last event time
 
         with hold_canvas(self.canvas):
-            # Update mouse state
+            # Update probe position
             self.probe_x, self.probe_y = x, y
             if pressed == 2:
-                self.mouse_btn = 1
+                # self.mouse_btn = 1
+                if current_time - self._last_mouse_down_time < 0.2:
+                    self.mouse_btn = 2 # Double-click
+                else:
+                    self.mouse_btn = 1 # Single-click
+                self._last_mouse_down_time = current_time
             elif pressed == 3:
                 self.mouse_btn = 0
             # Update probe features, mappers, and render canvas
             self.draw()
+
+    def key_callback(self, key, shift_key, ctrl_key, meta_key):
+        print("Keyboard event:", key, shift_key, ctrl_key, meta_key)
 
 
     # GUI callbacks

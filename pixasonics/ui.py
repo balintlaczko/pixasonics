@@ -94,6 +94,7 @@ class FeatureCard():
         self.value = value
         self.app = None
         self.feature = None
+        self.num_features = 1 # default to 1 feature
         self.create_ui()
 
     def __call__(self):
@@ -104,10 +105,10 @@ class FeatureCard():
         if self.app is not None and self.feature is not None:
             self.app.detach_feature(self.feature)
 
-    # def reset_callback(self, b):
-    #     print("FeatureCard: resetting min max", self.id)
-    #     if self.feature is not None:
-    #         self.feature.reset_minmax()
+    def reset_callback(self, b):
+        print("FeatureCard: resetting min max", self.id)
+        if self.feature is not None:
+            self.feature.reset_minmax()
 
     def create_ui(self):
         feature_label = Label(
@@ -128,6 +129,21 @@ class FeatureCard():
             layout=Layout(
                 justify_content='space-between',
                 align_items='flex-start',
+                flex_flow='row',
+                width='100%'))
+        
+        num_features_label = Label(value="Number of Features:")
+        num_features_value = IntText(
+            value=self.num_features,
+            disabled=True,
+            layout=Layout(width='60px')
+        )
+        num_features_value.tag = "num_features"
+
+        num_features_block = Box(
+            [num_features_label, num_features_value],
+            layout=Layout(
+                justify_content='space-between',
                 flex_flow='row',
                 width='100%'))
 
@@ -180,12 +196,12 @@ class FeatureCard():
                 width='100%'))
 
 
-        # reset_btn = Button(
-        #     description="Reset", 
-        #     button_style='warning', 
-        #     icon='refresh',
-        #     layout=Layout(max_width='80px'))
-        # reset_btn.on_click(self.reset_callback)
+        reset_btn = Button(
+            description="Reset", 
+            button_style='warning', 
+            icon='refresh',
+            layout=Layout(max_width='80px'))
+        reset_btn.on_click(self.reset_callback)
 
         detach_btn = Button(
             description="Detach", 
@@ -195,14 +211,14 @@ class FeatureCard():
         detach_btn.on_click(self.detach_callback)
         
         btn_row = Box(
-            # [reset_btn, detach_btn], 
-            [detach_btn], 
+            [reset_btn, detach_btn], 
+            # [detach_btn], 
             layout=Layout(
                 width='100%',
-                justify_content='flex-end'))
+                justify_content='space-between'))
 
         self.card = Box(
-            children=[top_block, min_block, max_block, value_block, btn_row],
+            children=[top_block, num_features_block, min_block, max_block, value_block, btn_row],
             layout=Layout(
                 width='auto', 
                 flex_flow='column',
@@ -643,7 +659,7 @@ class ProbeSettings():
             options=['Hold', 'Toggle'],
             value='Hold',
             button_style='',
-            tooltips=['Sound while mouse down', 'Click to start sound, click again to stop'],
+            tooltips=['Sound while mouse down', 'Double-click to start sound, double-click again to stop'],
             layout=Layout(padding='0px 0px 0px 10px'),
             style=dict(
                 button_width='70px')
@@ -656,6 +672,17 @@ class ProbeSettings():
                 align_items='flex-start', 
                 flex_flow='row',
                 padding='5px'))
+        
+        probe_follows_idle_mouse_checkbox = Checkbox(
+            value=True,
+            description='Probe follows idle mouse',
+            tooltip='When enabled, the probe will follow the mouse when not interacting with the canvas',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_follows_idle_mouse_checkbox.tag = "probe_follows_idle_mouse"
         
         probe_x_label = Label(value="Probe X:")
         probe_x_value = IntText(
@@ -695,7 +722,7 @@ class ProbeSettings():
                 flex_flow='row'))
 
         self.box = Box(
-            [probe_w_box, probe_h_box, interaction_mode_box, probe_xy_box], 
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, probe_xy_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 

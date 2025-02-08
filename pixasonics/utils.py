@@ -81,6 +81,64 @@ def resize_interp(
     return np.interp(output_x, input_x, input)
 
 
+def filter_matrix(
+        matrix, 
+        filter_rows=None,
+        filter_cols=None,
+        filter_chans=None,
+        filter_layers=None):
+    """Filter a 4D matrix based on the provided filter inputs. 
+    The filter inputs can be None, int, slice, list, or str (e.g. "0:3")."""
+    filter_inputs = [filter_rows, filter_cols, filter_chans, filter_layers]
+    filter_slices = [None] * 4
+
+    for i, filter_input in enumerate(filter_inputs):
+        if filter_input is None:
+            filter_slices[i] = slice(None)
+        elif isinstance(filter_input, int):
+            filter_slices[i] = slice(filter_input, filter_input + 1)
+        elif isinstance(filter_input, slice):
+            filter_slices[i] = filter_input
+        elif isinstance(filter_input, list):
+            filter_slices[i] = filter_input
+        elif isinstance(filter_input, str): # e.g. "0:3"
+            filter_slices[i] = slice(*map(int, filter_input.split(":")))
+        else:
+            raise ValueError(f"Invalid filter input: {filter_input}")
+
+    return matrix[filter_slices[0], filter_slices[1], filter_slices[2], filter_slices[3]]
+
+def test_filter_matrix():
+    # tests
+    a = np.random.rand(100, 100, 20, 10)
+    b = filter_matrix(a, None, None, None, None)
+    assert b.shape == a.shape
+    b = filter_matrix(a, 0, None, None, None)
+    assert b.shape == (1, 100, 20, 10)
+    b = filter_matrix(a, slice(0, 3), None, None, None) 
+    assert b.shape == (3, 100, 20, 10)
+    b = filter_matrix(a, [0, 2, 5], None, None, None)
+    assert b.shape == (3, 100, 20, 10)
+    b = filter_matrix(a, "0:3", None, None, None)
+    assert b.shape == (3, 100, 20, 10)
+    b = filter_matrix(a, None, None, None, 0)
+    assert b.shape == (100, 100, 20, 1)
+    b = filter_matrix(a, None, None, None, slice(0, 3))
+    assert b.shape == (100, 100, 20, 3)
+    b = filter_matrix(a, None, None, None, [0, 2, 5])
+    assert b.shape == (100, 100, 20, 3)
+    b = filter_matrix(a, None, None, None, "0:3")
+    assert b.shape == (100, 100, 20, 3)
+    b = filter_matrix(a, 0, 0, 0, 0)
+    assert b.shape == (1, 1, 1, 1)
+    b = filter_matrix(a, 0, 0, 0, slice(0, 3))
+    assert b.shape == (1, 1, 1, 3)
+    b = filter_matrix(a, 0, 0, 0, [0, 2, 5])
+    assert b.shape == (1, 1, 1, 3)
+    b = filter_matrix(a, 0, 0, 0, "0:3")
+    assert b.shape == (1, 1, 1, 3)
+
+
 def broadcast_params(*param_lists):
     """Helper function to broadcast and interpolate all param lists to the same length."""
     # if an input list is just a single value, convert it to a list
@@ -93,3 +151,4 @@ def broadcast_params(*param_lists):
             plist = resize_interp(plist, max_len).tolist()
         broadcasted_params.append(plist)
     return broadcasted_params
+
