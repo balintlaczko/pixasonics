@@ -83,8 +83,8 @@ class Feature():
             self.initialize(mat_filtered)
         self.features.data[:, :] = self.compute(mat_filtered)
 
-        if self.target_dim < 2: # when the target dim is either width or height
-            self.update_minmax() # then we have to keep a running minmax
+        # if self.target_dim < 2: # when the target dim is either width or height
+        self.update_minmax() # then we have to keep a running minmax
         self.update_ui()
     
     def compute(self, mat):
@@ -155,10 +155,6 @@ class Feature():
         self.max = np.ones_like(self.features.data) * -1e6
         self.update_minmax()
         self.update_ui()
-
-
-# create Value class that is just an alias for Feature
-Value = Feature
 
 
 # class MeanPixelValue(Feature):

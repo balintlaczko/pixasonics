@@ -4,8 +4,9 @@ from .utils import samps2mix, broadcast_params, array2str
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
 class Theremin(sf.Patch):
-    def __init__(self, frequency=440, amplitude=0.5, panning=0):
+    def __init__(self, frequency=440, amplitude=0.5, panning=0, name="Theremin"):
         super().__init__()
+        self.name = name
         self.params = {
             "frequency": {
                 "min": 60,
@@ -15,7 +16,7 @@ class Theremin(sf.Patch):
                 "scale": "log",
                 "buffer": None,
                 "buffer_player": None,
-                "name": "Theremin Frequency",
+                "name": f"{self.name} Frequency",
                 "param_name": "frequency",
                 "owner": self
             },
@@ -27,7 +28,7 @@ class Theremin(sf.Patch):
                 "scale": "linear",
                 "buffer": None,
                 "buffer_player": None,
-                "name": "Theremin Amplitude",
+                "name": f"{self.name} Amplitude",
                 "param_name": "amplitude",
                 "owner": self
             },
@@ -39,14 +40,14 @@ class Theremin(sf.Patch):
                 "scale": "linear",
                 "buffer": None,
                 "buffer_player": None,
-                "name": "Theremin Panning",
+                "name": f"{self.name} Panning",
                 "param_name": "panning",
                 "owner": self
             }
         }
         self.frequency, self.amplitude, self.panning = broadcast_params(frequency, amplitude, panning)
         self.num_channels = len(self.frequency) # at this point all lengths are the same
-        print(f"Theremin with {self.num_channels} channels")
+        print(f"Theremin {self.name} with {self.num_channels} channels")
 
         self.frequency_buffer = sf.Buffer(self.num_channels, 1)
         self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
@@ -109,7 +110,7 @@ class Theremin(sf.Patch):
     
     def create_ui(self):
         self._ui = SynthCard(
-            name="Theremin",
+            name=self.name,
             id=self.id,
             params=self.params,
             num_channels=self.num_channels
@@ -121,7 +122,7 @@ class Theremin(sf.Patch):
         return self._ui()
     
     def __repr__(self):
-        return f"Theremin {self.id}"
+        return f"Theremin {self.id}: {self.name}"
     
 
 class Envelope(sf.Patch):

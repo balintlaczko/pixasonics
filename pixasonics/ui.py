@@ -912,7 +912,7 @@ class AppUI():
                 features_carousel, 
                 synths_carousel, 
                 mappers_carousel],
-            titles=('Audio Settings', 'Image Settings', 'Probe Settings', "Image Features", "Synths", "Mappers"),
+            titles=('Audio Settings', 'Image Settings', 'Probe Settings', "Features", "Synths", "Mappers"),
             layout=Layout(width='400px', min_width='300px', max_width='400px'))
         app_settings.tag = "app_settings"
 
