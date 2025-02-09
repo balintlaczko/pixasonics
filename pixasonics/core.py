@@ -20,8 +20,7 @@ class App():
             ):
         
         self.image_size = image_size
-        self.fps = fps
-        self.refresh_interval = 1 / fps
+
 
         # Global state variables
         self.is_drawing = False
@@ -30,6 +29,8 @@ class App():
         self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
 
         # Private properties
+        self._fps = fps
+        self._refresh_interval = 1 / fps
         self._probe_x = 0
         self._probe_y = 0
         self._mouse_btn = 0
@@ -55,6 +56,15 @@ class App():
 
         self.create_ui()
         self.create_audio_graph()
+
+    @property
+    def fps(self):
+        return self._fps
+    
+    @fps.setter
+    def fps(self, value):
+        self._fps = value
+        self._refresh_interval = 1 / value
 
     @property
     def normalize_display(self):
@@ -716,7 +726,7 @@ class App():
 
         # Drop excess events over the refresh interval
         current_time = time.time()
-        if current_time - self.last_draw_time < self.refresh_interval and pressed < 2: # only skip if mouse is up
+        if current_time - self.last_draw_time < self._refresh_interval and pressed < 2: # only skip if mouse is up
             return  # Skip if we are processing too quickly
         self.last_draw_time = current_time  # Update the last event time
 
