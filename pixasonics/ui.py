@@ -579,7 +579,7 @@ class EnvelopeCard():
             )
         )
 
-        duration_label = Label(value="Duration:")
+        duration_label = Label(value="Duration (s):")
         duration_value = FloatText(
             value=0,
             disabled=True,
@@ -600,7 +600,7 @@ class EnvelopeCard():
                 border='1px solid black',
                 min_width='280px',
                 max_width='500px',
-                width='90%',
+                width='97%',
                 min_height='210px',
                 max_height='400px',
                 height='210px',
@@ -781,8 +781,41 @@ class AudioSettings():
                 max_height='80px'
                 ))
         
+        recording_file_name_label = Label(value="Recording File Name:")
+        recording_file_name = Text(
+            value="recording.wav",
+            placeholder='recording.wav',
+            description='',
+            layout=Layout(width='90%')
+        )
+        recording_file_name.tag = "recording_file_name"
+        recording_file_name_box = VBox(
+            [recording_file_name_label, recording_file_name],
+            layout=Layout(
+                width='70%',
+                justify_content='space-around', 
+                align_items='flex-start', 
+                padding='5px'))
+        recording_toggle = ToggleButton(
+            value=False,
+            description='Record',
+            tooltip='Start/stop real-time audio recording to the specified file',
+            icon='microphone',
+            layout=Layout(
+                width='auto', 
+                max_width='90px',
+                height='auto')
+        )
+        recording_toggle.tag = "recording_toggle"
+        recording_box = HBox(
+            [recording_file_name_box, recording_toggle],
+            layout=Layout(
+                width='100%',
+                max_height='80px',
+                justify_content='space-between'))
+        
         self.box = VBox(
-            [self.master_box], 
+            [self.master_box, recording_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 

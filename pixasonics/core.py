@@ -328,8 +328,8 @@ class App():
         self.master_envelope_bus.add_input(self.master_envelope.output)
         # add ui to the app ui
         audio_settings = find_widget_by_tag(self.ui, "audio_settings")
-        # always keep the first child only, and replace the rest with this env ui
-        audio_settings.children = [audio_settings.children[0], self.master_envelope.ui]
+        # always keep the first 2 children only, and replace the rest with this env ui
+        audio_settings.children = [*audio_settings.children[:2], self.master_envelope.ui]
 
         # Main bus
         self.bus = sf.Bus(num_channels=2)
