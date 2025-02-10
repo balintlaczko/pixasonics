@@ -885,11 +885,11 @@ class AppUI():
         return self.box
 
     def create_ui(self, audio_settings, image_settings, probe_settings):
-        features_carousel = VBox([])
+        features_carousel = VBox([], layout=Layout(overflow='auto'))
         features_carousel.tag = "features_carousel"
-        synths_carousel = VBox([])
+        synths_carousel = VBox([], layout=Layout(overflow='auto'))
         synths_carousel.tag = "synths_carousel"
-        mappers_carousel = VBox([])
+        mappers_carousel = VBox([], layout=Layout(overflow='auto'))
         mappers_carousel.tag = "mappers_carousel"
 
         app_canvas = Box(
@@ -919,8 +919,7 @@ class AppUI():
         app_settings_container = Box(
             [app_settings], 
             layout=Layout(
-                overflow='hidden',
-                # overflow='scroll',
+                overflow='auto',
                 # border='3px solid black',
                 padding='5px',
                 max_height='600px',))
