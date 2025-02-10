@@ -8,16 +8,8 @@ setup(
     description='An Image Sonification Toolbox',
     packages=find_packages(),
     install_requires=[
-        # TODO: Add dependencies
         "numpy",
-        # "opencv-python",
         "pillow",
-        # "librosa",
-        # "matplotlib",
-        # "scipy",
-        # "tqdm",
-        # "pandas",
-        # "scikit-learn",
         "signalflow",
         # "taichi",
         "ipython",

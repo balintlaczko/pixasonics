@@ -47,7 +47,6 @@ class Theremin(sf.Patch):
         }
         self.frequency, self.amplitude, self.panning = broadcast_params(frequency, amplitude, panning)
         self.num_channels = len(self.frequency) # at this point all lengths are the same
-        print(f"Theremin {self.name} with {self.num_channels} channels")
 
         self.frequency_buffer = sf.Buffer(self.num_channels, 1)
         self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
@@ -228,7 +227,6 @@ class Oscillator(sf.Patch):
         }
         self.frequency, self.amplitude, self.panning, self.lp_cutoff, self.lp_resonance, self.hp_cutoff, self.hp_resonance = broadcast_params(frequency, amplitude, panning, lp_cutoff, lp_resonance, hp_cutoff, hp_resonance)
         self.num_channels = len(self.frequency) # at this point all lengths are the same
-        print(f"Oscillator {self.name} with {self.num_channels} channels")
 
         self.frequency_buffer = sf.Buffer(self.num_channels, 1)
         self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
@@ -408,7 +406,6 @@ class FilteredNoise(sf.Patch):
         }
         self.cutoff, self.resonance, self.amplitude, self.panning = broadcast_params(cutoff, resonance, amplitude, panning)
         self.num_channels = len(self.cutoff) # at this point all lengths are the same
-        print(f"FilteredNoise {self.name} with {self.num_channels} channels")
 
         self.cutoff_buffer = sf.Buffer(self.num_channels, 1)
         self.resonance_buffer = sf.Buffer(self.num_channels, 1)
@@ -630,7 +627,6 @@ class SimpleFM(sf.Patch):
         }
         self.carrier_freq, self.harm_ratio, self.mod_index, self.amplitude, self.panning, self.lp_cutoff, self.lp_resonance, self.hp_cutoff, self.hp_resonance = broadcast_params(carrier_frequency, harmonicity_ratio, modulation_index, amplitude, panning, lp_cutoff, lp_resonance, hp_cutoff, hp_resonance)
         self.num_channels = len(self.carrier_freq) # at this point all lengths are the same
-        print(f"SimpleFM {self.name} with {self.num_channels} channels")
 
         self.carrier_freq_buffer = sf.Buffer(self.num_channels, 1)
         self.harm_ratio_buffer = sf.Buffer(self.num_channels, 1)
@@ -758,7 +754,7 @@ class SimpleFM(sf.Patch):
     
 
 class Envelope(sf.Patch):
-    def __init__(self, attack=0.01, decay=0.01, sustain=0.5, release=0.1):
+    def __init__(self, attack=0.01, decay=0.01, sustain=0.5, release=0.1, name="Envelope"):
         super().__init__()
         self.params = {
             "attack": {
@@ -790,6 +786,7 @@ class Envelope(sf.Patch):
                 "param_name": "release"
             }
         }
+        self.name = name
         self.params["attack"]["default"] = attack
         self.params["decay"]["default"] = decay
         self.params["sustain"]["default"] = sustain
@@ -835,7 +832,7 @@ class Envelope(sf.Patch):
         return self.params[key]
     
     def create_ui(self):
-        self._ui = EnvelopeCard("Envelope", self.id, self.params)
+        self._ui = EnvelopeCard(self.name, self.id, self.params)
         self._ui.envelope = self
 
     @property

@@ -6,10 +6,12 @@ from .utils import array2str
 class MapperCard():
     def __init__(
             self, 
+            name: str = "Mapper",
             id: str = "# ID", 
             from_name: str = "(mapping source)",
             to_name: str = "(mapping target)",
     ):
+        self.name = name
         self.id = id
         self.from_name = from_name
         self.to_name = to_name
@@ -21,13 +23,12 @@ class MapperCard():
         return self.card
 
     def detach_callback(self, b):
-        print("MapperCard: detaching mapper", self.id)
         if self.app is not None and self.mapper is not None:
             self.app.detach_mapper(self.mapper)
 
     def create_ui(self):
         mapper_label = Label(
-            value="Mapper", 
+            value=self.name, 
             style=dict(
                 font_weight='bold',
                 font_size='20px'))
@@ -59,6 +60,7 @@ class MapperCard():
             description="Detach", 
             button_style='danger', 
             icon='unlink',
+            tooltip='Detach from the app',
             layout=Layout(max_width='80px'))
         detach_row = Box(
             [detach_btn], 
@@ -101,12 +103,10 @@ class FeatureCard():
         return self.card
 
     def detach_callback(self, b):
-        print("FeatureCard: detaching feature", self.id)
         if self.app is not None and self.feature is not None:
             self.app.detach_feature(self.feature)
 
     def reset_callback(self, b):
-        print("FeatureCard: resetting min max", self.id)
         if self.feature is not None:
             self.feature.reset_minmax()
 
@@ -200,6 +200,7 @@ class FeatureCard():
             description="Reset", 
             button_style='warning', 
             icon='refresh',
+            tooltip='Reset to the running min and max',
             layout=Layout(max_width='80px'))
         reset_btn.on_click(self.reset_callback)
 
@@ -207,6 +208,7 @@ class FeatureCard():
             description="Detach", 
             button_style='danger', 
             icon='unlink',
+            tooltip='Detach from the app',
             layout=Layout(max_width='80px'))
         detach_btn.on_click(self.detach_callback)
         
@@ -251,12 +253,10 @@ class SynthCard():
         return self.card
 
     def detach_callback(self, b):
-        print("SynthCard: detaching synth", self.id)
         if self.app is not None and self.synth is not None:
             self.app.detach_synth(self.synth)
 
     def reset_callback(self, b):
-        print("SynthCard: resetting to default params", self.id)
         if self.synth is not None:
             self.synth.reset_to_default()
 
@@ -340,6 +340,7 @@ class SynthCard():
             description="Reset", 
             button_style='warning', 
             icon='refresh',
+            tooltip='Reset parameters to their default values',
             layout=Layout(max_width='80px'))
         reset_btn.on_click(self.reset_callback)
 
@@ -347,6 +348,7 @@ class SynthCard():
             description="Detach", 
             button_style='danger', 
             icon='unlink',
+            tooltip='Detach from the app',
             layout=Layout(max_width='80px'))
         detach_btn.on_click(self.detach_callback)
         
@@ -673,7 +675,7 @@ class ProbeSettings():
                 padding='5px'))
         
         probe_follows_idle_mouse_checkbox = Checkbox(
-            value=True,
+            value=False,
             description='Probe follows idle mouse',
             tooltip='When enabled, the probe will follow the mouse when not interacting with the canvas',
             indent=False,
@@ -942,7 +944,7 @@ class AppUI():
                 features_carousel, 
                 synths_carousel, 
                 mappers_carousel],
-            titles=('Audio Settings', 'Image Settings', 'Probe Settings', "Features", "Synths", "Mappers"),
+            titles=('Audio Settings', 'Display Settings', 'Probe Settings', "Features", "Synths", "Mappers"),
             layout=Layout(width='400px', min_width='300px', max_width='400px'))
         app_settings.tag = "app_settings"
 

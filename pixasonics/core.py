@@ -36,7 +36,7 @@ class App():
         self._mouse_btn = 0
         self._probe_width = Model(50)
         self._probe_height = Model(50)
-        self._probe_follows_idle_mouse = Model(True)
+        self._probe_follows_idle_mouse = Model(False)
         self._interaction_mode = Model("Hold")
         self._last_mouse_down_time = 0
         self._master_volume = Model(0)
@@ -341,6 +341,7 @@ class App():
             decay=0.01,
             sustain=1,
             release=0.1,
+            name="Master Envelope"
         )
         self.master_envelope_bus = sf.Bus(1)
         self.master_envelope_bus.add_input(self.master_envelope.output)
@@ -802,8 +803,10 @@ class Mapper():
             out_high = None,
             exponent = 1,
             clamp: bool = True,
+            name: str = "Mapper"
 
     ):
+        self.name = name
         self.obj_in = obj_in
         self.obj_out = obj_out
 
@@ -821,6 +824,7 @@ class Mapper():
         self.id = str(id(self))
 
         self._ui = MapperCard(
+            name=self.name,
             id=self.id,
             from_name=self.obj_in.name,
             to_name=self.obj_out["name"],
