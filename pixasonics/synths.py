@@ -78,14 +78,10 @@ class Theremin(sf.Patch):
         graph = sf.AudioGraph.get_shared_graph()
         mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
         freq_smooth = sf.Smooth(self.frequency_value, mix_val)
-        # freq_smooth = LinearSmooth(self.frequency_value, smooth_time=smooth_time)
         amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
-        # amplitude_smooth = LinearSmooth(self.amplitude_value, smooth_time=smooth_time)
         panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
-        # panning_smooth = LinearSmooth(self.panning_value, smooth_time=smooth_time)
         
         sine = sf.SineOscillator(freq_smooth)
-        # output = sf.StereoPanner(sine * amplitude_smooth, pan=panning_smooth)
         output = Mixer(sine * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
         
         self.set_output(output)
@@ -94,7 +90,6 @@ class Theremin(sf.Patch):
         self.create_ui()
 
     def set_input_buf(self, name, value, from_slider=False):
-        # print(f"Setting {name} to {value}, from_slider={from_slider}")
         self.params[name]["buffer"].data[:, :] = value
         if not from_slider:
             slider = find_widget_by_tag(self.ui, name)
@@ -312,7 +307,6 @@ class Oscillator(sf.Patch):
         self.create_ui()
 
     def set_input_buf(self, name, value, from_slider=False):
-        # print(f"Setting {name} to {value}, from_slider={from_slider}")
         self.params[name]["buffer"].data[:, :] = value
         if not from_slider:
             slider = find_widget_by_tag(self.ui, name)
@@ -471,16 +465,12 @@ class FilteredNoise(sf.Patch):
         
         out = Mixer(filters * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
         
-        # out_rms = sf.RMS(out)
-        # out = out / out_rms
-
         self.set_output(out * 0.707 * 0.5)
 
         self.id = str(id(self))
         self.create_ui()
 
     def set_input_buf(self, name, value, from_slider=False):
-        # print(f"Setting {name} to {value}, from_slider={from_slider}")
         self.params[name]["buffer"].data[:, :] = value
         if not from_slider:
             slider = find_widget_by_tag(self.ui, name)
@@ -737,7 +727,6 @@ class SimpleFM(sf.Patch):
         self.create_ui()
 
     def set_input_buf(self, name, value, from_slider=False):
-        # print(f"Setting {name} to {value}, from_slider={from_slider}")
         self.params[name]["buffer"].data[:, :] = value
         if not from_slider:
             slider = find_widget_by_tag(self.ui, name)

@@ -212,7 +212,6 @@ class FeatureCard():
         
         btn_row = Box(
             [reset_btn, detach_btn], 
-            # [detach_btn], 
             layout=Layout(
                 width='100%',
                 justify_content='space-between'))
@@ -775,22 +774,20 @@ class AudioSettings():
             children=[audio_switch, master_volume_box],
             layout=Layout(
                 width='100%', 
-                # grid_template_columns='auto auto', 
-                # grid_template_rows='auto',
                 justify_content='space-between',
                 max_height='80px'
                 ))
         
-        recording_file_name_label = Label(value="Recording File Name:")
-        recording_file_name = Text(
+        recording_path_label = Label(value="Recording Path:")
+        recording_path = Text(
             value="recording.wav",
             placeholder='recording.wav',
             description='',
             layout=Layout(width='90%')
         )
-        recording_file_name.tag = "recording_file_name"
-        recording_file_name_box = VBox(
-            [recording_file_name_label, recording_file_name],
+        recording_path.tag = "recording_path"
+        recording_path_box = VBox(
+            [recording_path_label, recording_path],
             layout=Layout(
                 width='70%',
                 justify_content='space-around', 
@@ -808,7 +805,7 @@ class AudioSettings():
         )
         recording_toggle.tag = "recording_toggle"
         recording_box = HBox(
-            [recording_file_name_box, recording_toggle],
+            [recording_path_box, recording_toggle],
             layout=Layout(
                 width='100%',
                 max_height='80px',
@@ -953,7 +950,6 @@ class AppUI():
             [app_settings], 
             layout=Layout(
                 overflow='auto',
-                # border='3px solid black',
                 padding='5px',
                 max_height=f'{canvas_height}px',))
 

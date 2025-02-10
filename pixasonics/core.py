@@ -40,7 +40,9 @@ class App():
         self._interaction_mode = Model("Hold")
         self._last_mouse_down_time = 0
         self._master_volume = Model(0)
-        self._audio = Model(0)
+        self._audio = Model(False)
+        self._recording = Model(False)
+        self._recording_path = Model("recording.wav")
         self._unmuted = False
         self._nrt = nrt
         self._normalize_display = Model(False)
@@ -148,7 +150,6 @@ class App():
     def update_probe_xy(self):
         self.probe_x = self.probe_x
         self.probe_y = self.probe_y
-        # self.draw()
 
     @property
     def mouse_btn(self):
@@ -161,7 +162,6 @@ class App():
             self.unmuted = value > 0
         elif self.interaction_mode == "Toggle" and value > 1: # double-click
             self.unmuted = not self.unmuted
-        # self.enable_dsp(True) if value > 0 else self.enable_dsp(False)
 
     @property
     def probe_width(self):
@@ -190,6 +190,7 @@ class App():
     @master_volume.setter
     def master_volume(self, value):
         self._master_volume.value = value
+        self.set_master_volume()
 
     @property
     def audio(self):
@@ -198,6 +199,26 @@ class App():
     @audio.setter
     def audio(self, value):
         self._audio.value = value
+        self.toggle_dsp()
+
+    @property
+    def recording(self):
+        return self._recording.value
+    
+    @recording.setter
+    def recording(self, value):
+        self._recording.value = value
+        self.toggle_record()
+
+    @property
+    def recording_path(self):
+        return self._recording_path.value
+    
+    @recording_path.setter
+    def recording_path(self, value):
+        if not value.endswith(".wav"):
+            value = value + ".wav"
+        self._recording_path.value = value
 
     @property
     def unmuted(self):
@@ -212,7 +233,6 @@ class App():
             self.master_envelope.off()
 
     def enable_dsp(self, state: bool):
-        # self.dsp_switch_buf.data[0][0] = 1 if state else 0
         self.master_envelope.on() if state else self.master_envelope.off()
 
     @property
@@ -277,11 +297,18 @@ class App():
         chkbox_probe_follows_idle_mouse = find_widget_by_tag(self.ui, "probe_follows_idle_mouse")
         self._probe_follows_idle_mouse.bind_widget(chkbox_probe_follows_idle_mouse)
 
-        # Bind the audio toggle and master volume to the widgets
+        # Bind the audio settings widgets
+        # Audio switch and master volume slider
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         self._audio.bind_widget(audio_switch, extra_callback=self.toggle_dsp)
         master_volume_slider = find_widget_by_tag(self.ui, "master_volume_slider")
         self._master_volume.bind_widget(master_volume_slider, extra_callback=self.set_master_volume)
+        # Recording toggle and file path
+        recording_toggle = find_widget_by_tag(self.ui, "recording_toggle")
+        self._recording.bind_widget(recording_toggle, extra_callback=self.toggle_record)
+        recording_path = find_widget_by_tag(self.ui, "recording_path")
+        self._recording_path.bind_widget(recording_path)
+
 
 
     def __call__(self):
@@ -306,18 +333,9 @@ class App():
         # Master volume
         self.master_slider_db = sf.Constant(0)
         self.master_slider_a = sf.DecibelsToAmplitude(self.master_slider_db)
-        # self.master_volume_smooth = sf.Smooth(self.master_slider_a * self.dsp_switch, samps2mix(24000))
         self.master_volume_smooth = sf.Smooth(self.master_slider_a, samps2mix(24000))
 
         # Master envelope
-        # self.master_envelope = sf.ADSREnvelope(
-        #     attack=0.05,
-        #     decay=0,
-        #     sustain=1,
-        #     release=0.05,
-        #     gate=self.dsp_switch
-        # )
-
         self.master_envelope = Envelope(
             attack=0.1,
             decay=0.01,
@@ -508,11 +526,9 @@ class App():
         # loop through the layers and resize each one
         img_data_resized = np.zeros(self.image_size + img_data.shape[2:], dtype=img_data.dtype)
         for i in range(img_data.shape[3]):
-            # print(f"Resizing layer {i}")
             layer = img_data[:, :, :, i]
             resized_layer = np.zeros(self.image_size + (layer.shape[2],), dtype=img_data.dtype)
             for j in range(layer.shape[2]):
-                # print(f"Resizing channel {j}")
                 img = Image.fromarray(layer[:, :, j])
                 resized_layer[:, :, j] = np.array(img.resize(self.image_size[::-1])) # PIL uses (W, H) instead of (H, W)
             img_data_resized[:, :, :, i] = resized_layer
@@ -695,7 +711,6 @@ class App():
         self.compute_features(probe_mat)
 
         # Update mappings
-        # if self.mouse_btn > 0:
         if self.unmuted:
             self.compute_mappers()
 
@@ -703,7 +718,6 @@ class App():
         self.canvas[1].clear()
 
         # Put the probe rectangle to the canvas
-        # self.canvas[1].stroke_style = 'red' if self.mouse_btn > 0 else 'yellow'
         self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
         self.canvas[1].stroke_rect(
             int(self.probe_x - self.probe_width//2), 
@@ -716,12 +730,6 @@ class App():
         probe_x_numbox.value = self.probe_x
         probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
         probe_y_numbox.value = self.probe_y
-
-        # # Put the probe to the canvas
-        # probe_data = (probe_mat * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # self.canvas[1].put_image_data(probe_data, 0, 0)
-        # if self.mouse_btn > 0:
-        #     display(Image.fromarray(probe_data))
 
 
     def mouse_callback(self, x, y, pressed: int = 0):
@@ -742,7 +750,6 @@ class App():
             # Update probe position
             self.probe_x, self.probe_y = x, y
             if pressed == 2:
-                # self.mouse_btn = 1
                 if current_time - self._last_mouse_down_time < 0.2:
                     self.mouse_btn = 2 # Double-click
                 else:
@@ -760,14 +767,24 @@ class App():
     # GUI callbacks
 
     def toggle_dsp(self):
-        if self.audio > 0:
+        audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+        if self.audio:
             self.graph.start()
-            audio_switch = find_widget_by_tag(self.ui, "audio_switch")
             audio_switch.style.text_color = 'green'
         else:
             self.graph.stop()
-            audio_switch = find_widget_by_tag(self.ui, "audio_switch")
             audio_switch.style.text_color = 'black'
+
+    def toggle_record(self):
+        recording_toggle = find_widget_by_tag(self.ui, "recording_toggle")
+        # Ensure the recording path ends with .wav
+        self.recording_path = self.recording_path
+        if self.recording:
+            self.graph.start_recording(self.recording_path)
+            recording_toggle.style.text_color = 'red'
+        else:
+            self.graph.stop_recording()
+            recording_toggle.style.text_color = 'black'
 
     def set_master_volume(self):
         self.master_slider_db.set_value(self.master_volume)
@@ -791,7 +808,6 @@ class Mapper():
         self.obj_out = obj_out
 
         # expecting a synth's param dict here
-        # self.buf_out = self.obj_out["buffer"]
         self.obj_out_owner = self.obj_out["owner"]
 
         # save scaling parameters
@@ -823,7 +839,7 @@ class Mapper():
         # elif isinstance(self.obj_in, dict):
         #     self.buf_in = self.obj_in["buffer"]
         else:
-            raise ValueError("Input object must be a Feature") # or a dict")
+            raise ValueError("Input object must be a Feature")
 
     @property
     def nrt(self):
@@ -886,23 +902,9 @@ class Mapper():
         else:
             return self._out_high
 
-    # def map(self):
-    #     # scale the input buffer to the output buffer
-    #     self.buf_out.data[:,:] = scale_array_exp(
-    #         self.buf_in.data,
-    #         self.in_low,
-    #         self.in_high,
-    #         self.out_low,
-    #         self.out_high,
-    #         self.exponent
-    #     )
-    #     if self.clamp:
-    #         self.buf_out.data[:, :] = np.clip(self.buf_out.data[:, :], self.out_low, self.out_high)
 
     def map(self, frame=None):
-        # print("Before mapping:", self.buf_in.data.shape, self.in_low.shape, self.in_high.shape)
         if self.buf_in.data.shape[0] != self.obj_out_owner.num_channels:
-            # print("Resizing input buffer, then mapping")
             in_data = resize_interp(self.buf_in.data.flatten(), self.obj_out_owner.num_channels)
             in_data = in_data.reshape(self.obj_out_owner.num_channels, 1)
             in_low = resize_interp(self.in_low.flatten(), self.obj_out_owner.num_channels)
@@ -918,7 +920,6 @@ class Mapper():
                 self.exponent
             ) # shape: (num_features, 1)
         else:
-            # print("Mapping without resizing")
             # scale the input buffer to the output buffer
             scaled_val = scale_array_exp(
                 self.buf_in.data,
@@ -930,11 +931,9 @@ class Mapper():
             ) # shape: (num_features, 1)
 
         if self.clamp:
-            # print(scaled_val.shape)
             scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
 
         if not self.nrt:
-            # print(scaled_val.shape)
             self.obj_out_owner.set_input_buf(
                 self.obj_out["param_name"],
                 scaled_val,

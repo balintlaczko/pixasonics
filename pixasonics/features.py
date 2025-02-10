@@ -70,7 +70,6 @@ class Feature():
         return tuple(i for i in range(4) if i != self.target_dim)
 
     def __call__(self, mat):
-        # print("In Feature:", self.features.data.shape)
         mat_filtered = filter_matrix(
             mat,
             self.filter_rows,
@@ -83,7 +82,6 @@ class Feature():
             self.initialize(mat_filtered)
         self.features.data[:, :] = self.compute(mat_filtered)
 
-        # if self.target_dim < 2: # when the target dim is either width or height
         self.update_minmax() # then we have to keep a running minmax
         self.update_ui()
     
