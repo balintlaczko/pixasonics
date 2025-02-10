@@ -611,18 +611,18 @@ class EnvelopeCard():
         
 
 class ProbeSettings():
-    def __init__(self):
-        self.create_ui()
+    def __init__(self, canvas_width=500, canvas_height=500):
+        self.create_ui(canvas_width, canvas_height)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self):
+    def create_ui(self, canvas_width, canvas_height):
         probe_w_label = Label(value="Probe Width:")
         probe_w_slider = IntSlider(
             value=50, 
             min=1, 
-            max=500, 
+            max=canvas_width, 
             step=1,
             layout=Layout(width='70%')
             )
@@ -640,7 +640,7 @@ class ProbeSettings():
         probe_h_slider = IntSlider(
             value=50, 
             min=1, 
-            max=500, 
+            max=canvas_height, 
             step=1,
             layout=Layout(width='70%')
             )
@@ -879,17 +879,17 @@ class AppUI():
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        self.create_ui(audio_settings, image_settings, probe_settings)
+        self.create_ui(audio_settings, image_settings, probe_settings, canvas_height)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self, audio_settings, image_settings, probe_settings):
-        features_carousel = VBox([], layout=Layout(overflow='auto'))
+    def create_ui(self, audio_settings, image_settings, probe_settings, canvas_height):
+        features_carousel = VBox([], layout=Layout(overflow='scroll'))
         features_carousel.tag = "features_carousel"
-        synths_carousel = VBox([], layout=Layout(overflow='auto'))
+        synths_carousel = VBox([], layout=Layout(overflow='scroll'))
         synths_carousel.tag = "synths_carousel"
-        mappers_carousel = VBox([], layout=Layout(overflow='auto'))
+        mappers_carousel = VBox([], layout=Layout(overflow='scroll'))
         mappers_carousel.tag = "mappers_carousel"
 
         app_canvas = Box(
@@ -922,7 +922,7 @@ class AppUI():
                 overflow='auto',
                 # border='3px solid black',
                 padding='5px',
-                max_height='600px',))
+                max_height=f'{canvas_height}px',))
 
         self.box = Box(
             [app_canvas, app_settings_container], 

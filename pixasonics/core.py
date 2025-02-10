@@ -25,7 +25,7 @@ class App():
         # Global state variables
         self.is_drawing = False
         self.last_draw_time = time.time()
-        self.bg_hires = np.zeros(image_size + (3,), dtype=np.float64) # np.array(img, dtype=np.float32) / 255
+        self.bg_hires = np.zeros(image_size + (3,), dtype=np.float64)
         self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
 
         # Private properties
@@ -128,7 +128,7 @@ class App():
     @probe_x.setter
     def probe_x(self, value):
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        x_clamped = np.clip(value, self.probe_width//2, self.image_size[0]-1-self.probe_width//2)
+        x_clamped = np.clip(value, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
         self._probe_x = int(round(x_clamped))
         if not self._nrt:
             self.draw()
@@ -140,7 +140,7 @@ class App():
     @probe_y.setter
     def probe_y(self, value):
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        y_clamped = np.clip(value, self.probe_height//2, self.image_size[1]-1-self.probe_height//2)
+        y_clamped = np.clip(value, self.probe_height//2, self.image_size[0]-1-self.probe_height//2)
         self._probe_y = int(round(y_clamped))
         if not self._nrt:
             self.draw()
@@ -226,16 +226,24 @@ class App():
 
     def create_ui(self):
         image_settings = ImageSettings()
-        probe_settings = ProbeSettings()
+        probe_settings = ProbeSettings(
+            canvas_width=self.image_size[1],
+            canvas_height=self.image_size[0]
+        )
         audio_settings = AudioSettings()
-        self.ui = AppUI(audio_settings, image_settings, probe_settings)()
+        self.ui = AppUI(
+            audio_settings, 
+            image_settings, 
+            probe_settings,
+            canvas_height=self.image_size[0],
+            canvas_width=self.image_size[1])()
         display(self.ui)
 
         # Create the canvas
         self.canvas = MultiCanvas(
             2,
-            width=self.image_size[0], 
-            height=self.image_size[1])
+            width=self.image_size[1], 
+            height=self.image_size[0])
         app_canvas = find_widget_by_tag(self.ui, "app_canvas")
         app_canvas.children = [self.canvas]
 
@@ -413,7 +421,7 @@ class App():
         img = Image.open(image_path)
         if img.size != self.image_size:
             print("Resizing image to", self.image_size)
-            img = img.resize(self.image_size)
+            img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
         img = np.array(img)
         if len(img.shape) == 2:
             img = img[..., None, None] # add channel and layer dimensions if single-channel
@@ -506,7 +514,7 @@ class App():
             for j in range(layer.shape[2]):
                 # print(f"Resizing channel {j}")
                 img = Image.fromarray(layer[:, :, j])
-                resized_layer[:, :, j] = np.array(img.resize(self.image_size))
+                resized_layer[:, :, j] = np.array(img.resize(self.image_size[::-1])) # PIL uses (W, H) instead of (H, W)
             img_data_resized[:, :, :, i] = resized_layer
         return img_data_resized
 

@@ -14,7 +14,7 @@ class Feature():
             filter_layers=None,
             target_dim=2, # channel dim by default
             reduce_method="mean", # can be "mean", "max", "min", "sum", "std", "var", "median", 
-            name="Value"):
+            name="Feature"):
         self.filter_rows = filter_rows
         self.filter_columns = filter_columns
         self.filter_channels = filter_channels
