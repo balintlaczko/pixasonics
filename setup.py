@@ -2,11 +2,17 @@ from setuptools import setup, find_packages
 
 setup(
     name='pixasonics',
-    version='0.1.0',
+    version='0.1.2',
     author='Balint Laczko',
     author_email='balint.laczko@imv.uio.no',
     description='An Image Sonification Toolbox',
     packages=find_packages(),
+    include_package_data=True,
+    package_data={
+        'pixasonics': [
+            'figures/*', 'images/*', 'pixasonics_tutorial.ipynb'
+        ]
+    },
     install_requires=[
         "numpy",
         "pillow",
