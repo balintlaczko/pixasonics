@@ -818,8 +818,8 @@ class Mapper():
         self._in_high = in_high
         self._out_low = out_low
         self._out_high = out_high
-        self.exponent = exponent
-        self.clamp = clamp
+        self._exponent = exponent
+        self._clamp = clamp
 
         self.id = str(id(self))
 
@@ -833,6 +833,22 @@ class Mapper():
 
         self._nrt = False
         self._app = None
+
+    @property
+    def exponent(self):
+        return self._exponent
+    
+    @exponent.setter
+    def exponent(self, value):
+        self._exponent = value
+
+    @property
+    def clamp(self):
+        return self._clamp
+    
+    @clamp.setter
+    def clamp(self, value):
+        self._clamp = value
 
     @property
     def buf_in(self):
@@ -881,6 +897,10 @@ class Mapper():
                 return self.obj_in["min"]
         else:
             return self._in_low
+        
+    @in_low.setter
+    def in_low(self, value):
+        self._in_low = value
     
     @property
     def in_high(self):
@@ -891,6 +911,10 @@ class Mapper():
                 return self.obj_in["max"]
         else:
             return self._in_high
+        
+    @in_high.setter
+    def in_high(self, value):
+        self._in_high = value
 
     @property
     def out_low(self):
@@ -898,6 +922,10 @@ class Mapper():
             return self.obj_out["min"]
         else:
             return self._out_low
+        
+    @out_low.setter
+    def out_low(self, value):
+        self._out_low = value
 
     @property
     def out_high(self):
@@ -905,6 +933,10 @@ class Mapper():
             return self.obj_out["max"]
         else:
             return self._out_high
+        
+    @out_high.setter
+    def out_high(self, value):
+        self._out_high = value
 
 
     def map(self, frame=None):
