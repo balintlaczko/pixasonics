@@ -15,7 +15,7 @@ class App():
     def __init__(
             self,
             image_size: tuple[int] = (500, 500),
-            fps: int = 120,
+            fps: int = 60,
             nrt: bool = False
             ):
         
