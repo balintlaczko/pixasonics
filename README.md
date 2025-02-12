@@ -69,10 +69,6 @@ Image features are to be mapped to synthesis parameters, that is, to the setting
 
 What connects the output of a `Feature` and the input parameter of a Synth is a `Mapper` object. There can be multiple `Mapper`s reading from the same `Feature` buffer and a Synth can have multiple `Mapper`s modulating its different parameters.
 
-# Tutorial
-
-There is an ever-longer tutorial notebook [here](https://github.com/balintlaczko/pixasonics/blob/main/pixasonics/pixasonics_tutorial.ipynb) if you are curious to read more details.
-
 # How to contribute
 
 If you encounter any funky behavior, please open an [issue](https://github.com/balintlaczko/pixasonics/issues)!
