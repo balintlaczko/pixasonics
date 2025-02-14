@@ -1,5 +1,5 @@
 from .features import Feature
-from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp, samps2mix
+from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Envelope
 from ipycanvas import hold_canvas, MultiCanvas
@@ -8,6 +8,7 @@ import time
 import numpy as np
 import signalflow as sf
 from PIL import Image
+import threading
 
 
 
@@ -21,6 +22,11 @@ class App():
         
         self.image_size = image_size
 
+        # threading
+        self.compute_thread = None
+        self.compute_lock = threading.Lock()
+        self.compute_event = threading.Event()
+        self.stop_event = threading.Event()
 
         # Global state variables
         self.is_drawing = False
@@ -58,6 +64,7 @@ class App():
 
         self.create_ui()
         self.create_audio_graph()
+        self.start_compute_thread()
 
     @property
     def fps(self):
@@ -242,6 +249,31 @@ class App():
     @interaction_mode.setter
     def interaction_mode(self, value):
         self._interaction_mode.value = value.capitalize()
+
+
+    def start_compute_thread(self):
+        if self.compute_thread is None or not self.compute_thread.is_alive():
+            self.compute_thread = threading.Thread(target=self.compute_loop)
+            self.compute_thread.start()
+
+    def stop_compute_thread(self):
+        self.stop_event.set()
+        if self.compute_thread is not None:
+            self.compute_thread.join()
+
+    def compute_loop(self):
+        while not self.stop_event.is_set():
+            self.compute_event.wait()
+            self.compute_event.clear()
+            with self.compute_lock:
+                probe_mat = self.get_probe_matrix()
+                self.compute_features(probe_mat)
+                if self.unmuted:
+                    self.compute_mappers()
+            time.sleep(0.01)  # Small sleep to prevent busy-waiting
+
+    def __del__(self):
+        self.stop_compute_thread()
     
 
     def create_ui(self):
@@ -668,9 +700,9 @@ class App():
             "probe_y": 0,
         }
         new_timeline = []
-        for time, settings in timeline:
+        for timepoint, settings in timeline:
             new_settings = {**latest_setting, **settings}
-            new_timeline.append((time, new_settings))
+            new_timeline.append((timepoint, new_settings))
             latest_setting = new_settings
         return new_timeline
 
@@ -705,15 +737,17 @@ class App():
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
 
-        # Get probe matrix
-        probe_mat = self.get_probe_matrix()
+        # # Get probe matrix
+        # probe_mat = self.get_probe_matrix()
 
-        # Compute probe features
-        self.compute_features(probe_mat)
+        # # Compute probe features
+        # self.compute_features(probe_mat)
 
-        # Update mappings
-        if self.unmuted:
-            self.compute_mappers()
+        # # Update mappings
+        # if self.unmuted:
+        #     self.compute_mappers()
+
+        self.compute_event.set()
 
         # Clear the canvas
         self.canvas[1].clear()
