@@ -1,4 +1,5 @@
 import numpy as np
+from numba import jit
 
 def mix2samps(mixval, eps=1e-6):
     "Convert a mix value (used in sf.Smooth) to samples"
@@ -20,8 +21,7 @@ def array2str(arr, decimals=3):
     """String from an array, where elements are rounded to decimals, and the square brackets are removed."""
     return str(np.round(arr, decimals)).replace('[', '').replace(']', '')
 
-# @jit(nopython=True)
-# TODO: add numba support?
+@jit(nopython=True)
 def scale_array_exp(
     x: np.ndarray,
     in_low: np.ndarray,
@@ -59,6 +59,7 @@ def scale_array_exp(
             )
         )
 
+@jit(nopython=True)
 def resize_interp(
     input: np.ndarray,
     size: int,
@@ -78,7 +79,7 @@ def resize_interp(
     # create array with sampling indices
     output_x = np.linspace(0, len(input_x)-1, size)
     # interpolate
-    return np.interp(output_x, input_x, input)
+    return np.interp(output_x, input_x, input)#.astype(np.float64)
 
 
 def filter_matrix(

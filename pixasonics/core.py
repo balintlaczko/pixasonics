@@ -274,6 +274,7 @@ class App():
 
     def __del__(self):
         self.stop_compute_thread()
+        self.audio_out.stop()
     
 
     def create_ui(self):
@@ -449,6 +450,8 @@ class App():
             mappers_carousel.children = list(mappers_carousel.children) + [mapper.ui]
             mapper._ui.app = self
             mapper._app = self
+            # evaluate once to trigger JIT compilation
+            mapper()
 
     def detach_mapper(self, mapper):
         print(f"Detaching {mapper}")

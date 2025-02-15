@@ -20,6 +20,7 @@ setup(
     },
     install_requires=[
         "numpy",
+        "numba",
         "pillow",
         "signalflow",
         # "taichi",
