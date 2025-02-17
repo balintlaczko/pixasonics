@@ -347,14 +347,9 @@ class App():
 
     def create_audio_graph(self):
         self.graph = sf.AudioGraph.get_shared_graph()
-        output_device = sf.AudioOut_Dummy(2) if self.nrt else None
-        if self.graph is not None:
-            self.graph.destroy()
-        self.graph = sf.AudioGraph(
-            # start=self.nrt,
-            start=True,
-            output_device=output_device
-            )
+        if self.graph is None:
+            output_device = sf.AudioOut_Dummy(2) if self.nrt else None
+            self.graph = sf.AudioGraph(start=True, output_device=output_device)
 
         # Master volume
         self.master_slider_db = sf.Constant(0)
@@ -659,6 +654,7 @@ class App():
         timeline_frames = self.generate_timeline_frames(timeline, self._render_nframes, self.fps)
         
         # switch on NRT mode
+        self.graph.destroy()
         self.nrt = 1
 
         # render the timeline
@@ -668,6 +664,9 @@ class App():
 
         # render NRT audio
         self.graph.render_to_buffer(_output_buffer)
+
+        # destroy the graph
+        self.graph.destroy()
 
         return _output_buffer
 
