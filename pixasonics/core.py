@@ -11,6 +11,25 @@ from PIL import Image
 import threading
 
 
+class AppRegistry:
+    _instance = None
+    _apps = set()
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(AppRegistry, cls).__new__(cls)
+        return cls._instance
+
+    def register(self, app):
+        self._apps.add(app)
+
+    def unregister(self, app):
+        self._apps.discard(app)
+
+    def notify_reregister(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app.create_audio_graph()
 
 class App():
     def __init__(
@@ -65,6 +84,8 @@ class App():
         self.create_ui()
         self.create_audio_graph()
         self.start_compute_thread()
+
+        AppRegistry().register(self)
 
     @property
     def fps(self):
@@ -272,6 +293,7 @@ class App():
     def __del__(self):
         self.stop_compute_thread()
         self.audio_out.stop()
+        AppRegistry().unregister(self)
     
 
     def create_ui(self):
@@ -395,6 +417,7 @@ class App():
         if self.audio > 0 and not self.nrt:
             # self.graph.start()
             self.audio_out.play()
+            self.unmuted = self.unmuted # call the setter to update the envelope state
 
     
     def attach_synth(self, synth):
@@ -633,6 +656,7 @@ class App():
         out_buf = self.render_timeline(timeline)
         arr = np.copy(out_buf.data)
         self.nrt = 0
+        AppRegistry().notify_reregister(self)
         return arr
     
 
@@ -640,6 +664,7 @@ class App():
         out_buf = self.render_timeline(timeline)
         out_buf.save(target_filename)
         self.nrt = 0
+        AppRegistry().notify_reregister(self)
     
 
     def render_timeline(self, timeline):
