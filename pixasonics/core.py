@@ -239,9 +239,6 @@ class App():
         else:
             self.master_envelope.off()
 
-    # def enable_dsp(self, state: bool):
-    #     self.master_envelope.on() if state else self.master_envelope.off()
-
     @property
     def interaction_mode(self):
         return self._interaction_mode.value
@@ -354,14 +351,10 @@ class App():
         if self.graph is not None:
             self.graph.destroy()
         self.graph = sf.AudioGraph(
-            start=self.nrt,
+            # start=self.nrt,
+            start=True,
             output_device=output_device
             )
-
-        # DSP switch
-        # self.dsp_switch_buf = sf.Buffer(1, 1)
-        # self.dsp_switch_buf.data[0][0] = 1 if self.nrt else 0
-        # self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
         self.master_slider_db = sf.Constant(0)
@@ -395,16 +388,18 @@ class App():
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
-        # Connect the audio graph
-        self.audio_out.play()
+        # # Connect the audio graph
+        # self.audio_out.play()
 
         # in NRT mode, unmute the global envelope
         if self.nrt:
+            self.audio_out.play()
             self.master_envelope.on()
 
         # start graph if audio is enabled
         if self.audio > 0 and not self.nrt:
-            self.graph.start()
+            # self.graph.start()
+            self.audio_out.play()
 
     
     def attach_synth(self, synth):
@@ -807,10 +802,12 @@ class App():
     def toggle_dsp(self):
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
-            self.graph.start()
+            # self.graph.start()
+            self.audio_out.play()
             audio_switch.style.text_color = 'green'
         else:
-            self.graph.stop()
+            # self.graph.stop()
+            self.audio_out.stop()
             audio_switch.style.text_color = 'black'
 
     def toggle_record(self):
