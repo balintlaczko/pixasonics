@@ -239,8 +239,8 @@ class App():
         else:
             self.master_envelope.off()
 
-    def enable_dsp(self, state: bool):
-        self.master_envelope.on() if state else self.master_envelope.off()
+    # def enable_dsp(self, state: bool):
+    #     self.master_envelope.on() if state else self.master_envelope.off()
 
     @property
     def interaction_mode(self):
@@ -359,9 +359,9 @@ class App():
             )
 
         # DSP switch
-        self.dsp_switch_buf = sf.Buffer(1, 1)
-        self.dsp_switch_buf.data[0][0] = 1 if self.nrt else 0
-        self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
+        # self.dsp_switch_buf = sf.Buffer(1, 1)
+        # self.dsp_switch_buf.data[0][0] = 1 if self.nrt else 0
+        # self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
         self.master_slider_db = sf.Constant(0)

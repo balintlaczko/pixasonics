@@ -1,6 +1,6 @@
 import numpy as np
 import signalflow as sf
-from .utils import samps2mix, broadcast_params, array2str
+from .utils import samps2mix, broadcast_params, array2str, ParamSliderDebouncer, ParamSliderThrottler
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
 class Theremin(sf.Patch):
@@ -85,15 +85,57 @@ class Theremin(sf.Patch):
         
         self.set_output(output)
 
+        self.debouncer = ParamSliderDebouncer(0.05)
+        # self.throttler = ParamSliderThrottler(0.2)
+
         self.id = str(id(self))
         self.create_ui()
 
     def set_input_buf(self, name, value, from_slider=False):
+        # print("Setting input buffer", name, value, from_slider)
         self.params[name]["buffer"].data[:, :] = value
-        if not from_slider:
+        if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
             # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
-            slider.value = value if self.num_channels == 1 else array2str(value)
+            slider.unobserve_all()
+            slider_value = value if self.num_channels == 1 else array2str(value)
+            # slider.value = value if self.num_channels == 1 else array2str(value)
+            # print("Submitting update slider value", name, slider_value)
+            # self.throttler.submit(name, lambda: self.update_slider(slider, slider_value))
+            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+            # self.debouncer.submit(name, self.attach_slider(slider))
+            # self.throttler.submit(name, lambda: self.update_slider(slider, slider_value))
+        elif not from_slider and self.num_channels > 1:
+            slider = find_widget_by_tag(self.ui, name)
+            slider.value = array2str(value)
+        # if not from_slider:
+        #     slider = find_widget_by_tag(self.ui, name)
+        #     slider.value = value if self.num_channels == 1 else array2str(value)
+
+    
+    def update_slider(self, slider, value):
+        # print("Updating slider", slider.tag, value)
+        slider.unobserve_all()
+        slider.value = value
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value"
+        )
+
+    def attach_slider(self, slider):
+        slider.unobserve_all()
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value"
+        )
 
     def reset_to_default(self):
         for param in self.params:

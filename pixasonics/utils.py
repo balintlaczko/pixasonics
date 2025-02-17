@@ -1,5 +1,7 @@
 import numpy as np
 from numba import jit
+import threading
+import time
 
 def mix2samps(mixval, eps=1e-6):
     "Convert a mix value (used in sf.Smooth) to samples"
@@ -153,3 +155,97 @@ def broadcast_params(*param_lists):
         broadcasted_params.append(plist)
     return broadcasted_params
 
+
+class Timer:
+    def __init__(self, timeout, callback, manager):
+        self._timeout = timeout
+        self._callback = callback
+        self._manager = manager
+        self._start_time = None
+        self._cancel_event = threading.Event()
+
+    def start(self):
+        self._start_time = time.time()
+        self._manager.add_timer(self)
+
+    def cancel(self):
+        self._cancel_event.set()
+        self._manager.remove_timer(self)
+
+    @property
+    def scheduled(self):
+        return self in self._manager.timers
+
+    def remaining_time(self):
+        if self._start_time is None:
+            return float('inf')
+        elapsed = time.time() - self._start_time
+        return max(0, self._timeout - elapsed)
+
+    def execute(self):
+        if not self._cancel_event.is_set() and self._callback is not None:
+            self._callback()
+
+class TimerManager:
+    def __init__(self):
+        self.timers = []
+        self.lock = threading.Lock()
+        self.new_timer_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def add_timer(self, timer):
+        with self.lock:
+            self.timers.append(timer)
+            self.new_timer_event.set()
+
+    def remove_timer(self, timer):
+        with self.lock:
+            if timer in self.timers:
+                self.timers.remove(timer)
+                self.new_timer_event.set()
+
+    def _run(self):
+        while True:
+            with self.lock:
+                if not self.timers:
+                    self.new_timer_event.clear()
+
+            self.new_timer_event.wait()
+
+            with self.lock:
+                self.timers.sort(key=lambda t: t.remaining_time())
+                for timer in self.timers:
+                    if timer.remaining_time() <= 0:
+                        timer.execute()
+                        self.timers.remove(timer)
+
+            time.sleep(0.01)
+
+class ParamSliderDebouncer:
+    def __init__(self, wait=0.5):
+        self.wait = wait
+        self.manager = TimerManager()
+        self.timers = {}
+
+    def submit(self, key, callback):
+        if key in self.timers:
+            self.timers[key].cancel()
+        self.timers[key] = Timer(self.wait, callback, self.manager)
+        self.timers[key].start()
+
+class ParamSliderThrottler:
+    def __init__(self, wait=0.5):
+        self.wait = wait
+        self.manager = TimerManager()
+        self.timers = {}
+
+    def submit(self, key, callback):
+        if key not in self.timers:
+            self.timers[key] = Timer(self.wait, callback, self.manager)
+            self.timers[key].start()
+        else:
+            timer = self.timers[key]
+            if not timer.scheduled:
+                timer = Timer(self.wait, callback, self.manager)
+                timer.start()
