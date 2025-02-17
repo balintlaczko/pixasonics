@@ -405,9 +405,6 @@ class App():
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
-        # # Connect the audio graph
-        # self.audio_out.play()
-
         # in NRT mode, unmute the global envelope
         if self.nrt:
             self.audio_out.play()
@@ -415,7 +412,6 @@ class App():
 
         # start graph if audio is enabled
         if self.audio > 0 and not self.nrt:
-            # self.graph.start()
             self.audio_out.play()
             self.unmuted = self.unmuted # call the setter to update the envelope state
 
@@ -758,16 +754,6 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
-
-        # # Get probe matrix
-        # probe_mat = self.get_probe_matrix()
-
-        # # Compute probe features
-        # self.compute_features(probe_mat)
-
-        # # Update mappings
-        # if self.unmuted:
-        #     self.compute_mappers()
 
         self.compute_event.set()
 
