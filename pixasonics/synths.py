@@ -1,6 +1,6 @@
 import numpy as np
 import signalflow as sf
-from .utils import samps2mix, broadcast_params, array2str, ParamSliderDebouncer
+from .utils import broadcast_params, array2str, ParamSliderDebouncer
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
 PARAM_SLIDER_DEBOUNCE_TIME = 0.05
@@ -78,9 +78,6 @@ class Theremin(Synth):
         self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
         self.params["panning"]["buffer_player"] = self.panning_value
         
-        # smooth_time = 0.05
-        self.smooth_n_samps = 24000
-        mix_val = samps2mix(self.smooth_n_samps)
         graph = sf.AudioGraph.get_shared_graph()
         mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
         freq_smooth = sf.Smooth(self.frequency_value, mix_val)
