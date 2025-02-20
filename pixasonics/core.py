@@ -108,7 +108,6 @@ class App():
     @normalize_display.setter
     def normalize_display(self, value):
         self._normalize_display.value = value
-        #print("Calling redraw_background from normalize_display setter")
         self.redraw_background()
 
     @property
@@ -118,7 +117,6 @@ class App():
     @normalize_display_global.setter
     def normalize_display_global(self, value):
         self._normalize_display_global.value = value
-        #print("Calling redraw_background from normalize_display_global setter")
         self.redraw_background()
 
     @property
@@ -128,7 +126,6 @@ class App():
     @display_channel_offset.setter
     def display_channel_offset(self, value):
         self._display_channel_offset.value = value
-        #print("Calling redraw_background from display_channel_offset setter")
         self.redraw_background()
 
     @property
@@ -138,7 +135,6 @@ class App():
     @display_layer_offset.setter
     def display_layer_offset(self, value):
         self._display_layer_offset.value = value
-        #print("Calling redraw_background from display_layer_offset setter")
         self.redraw_background()
 
     @property
@@ -158,7 +154,6 @@ class App():
     
     @probe_follows_idle_mouse.setter
     def probe_follows_idle_mouse(self, value):
-        #print("Setting probe_follows_idle_mouse to", value)
         self._probe_follows_idle_mouse.value = value
 
     def clamp_probe_x(self, value):
@@ -177,10 +172,6 @@ class App():
     
     @probe_x.setter
     def probe_x(self, value):
-        #print("Setting probe_x to", value)
-        # # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        # x_clamped = np.clip(value, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
-        # self._probe_x = int(round(x_clamped))
         self._probe_x = self.clamp_probe_x(value)
         if not self._nrt:
             self.draw()
@@ -191,22 +182,12 @@ class App():
     
     @probe_y.setter
     def probe_y(self, value):
-        #print("Setting probe_y to", value)
-        # # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        # y_clamped = np.clip(value, self.probe_height//2, self.image_size[0]-1-self.probe_height//2)
-        # self._probe_y = int(round(y_clamped))
         self._probe_y = self.clamp_probe_y(value)
         if not self._nrt:
             self.draw()
 
     def update_probe_xy(self):
-        #print("Updating probe xy")
-        # self.probe_x = self.probe_x
-        # self.probe_y = self.probe_y
-        # x_clamped = np.clip(self.probe_x, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
-        # self._probe_x = int(round(x_clamped))
-        # y_clamped = np.clip(self.probe_y, self.probe_height//2, self.image_size[0]-1-self.probe_height//2)
-        # self._probe_y = int(round(y_clamped))
+        # Apply the clamped probe position without triggering a draw
         self._probe_x = self.clamp_probe_x(self.probe_x)
         self._probe_y = self.clamp_probe_y(self.probe_y)
         if not self._nrt:
@@ -218,7 +199,6 @@ class App():
     
     @mouse_btn.setter
     def mouse_btn(self, value):
-        #print("Setting mouse_btn to", value)
         self._mouse_btn = value
         if self.interaction_mode == "Hold":
             self.unmuted = value > 0
@@ -231,10 +211,8 @@ class App():
     
     @probe_width.setter
     def probe_width(self, value):
-        #print("Setting probe_width to", value)
         self._probe_width.value = value
         # Update mouse xy to keep it in the middle of the probe
-        #print("Calling update_probe_xy from probe_width setter")
         self.update_probe_xy()
 
     @property
@@ -243,10 +221,8 @@ class App():
     
     @probe_height.setter
     def probe_height(self, value):
-        #print("Setting probe_height to", value)
         self._probe_height.value = value
         # Update mouse xy to keep it in the middle of the probe
-        #print("Calling update_probe_xy from probe_height setter")
         self.update_probe_xy()
 
     @property
@@ -265,7 +241,6 @@ class App():
     @master_volume.setter
     def master_volume(self, value):
         self._master_volume.value = value
-        #print("Calling set_master_volume from master_volume setter")
         self.set_master_volume()
 
     @property
@@ -275,7 +250,6 @@ class App():
     @audio.setter
     def audio(self, value):
         self._audio.value = value
-        #print("Calling toggle_dsp from audio setter")
         self.toggle_dsp()
 
     @property
@@ -285,7 +259,6 @@ class App():
     @recording.setter
     def recording(self, value):
         self._recording.value = value
-        #print("Calling toggle_record from recording setter")
         self.toggle_record()
 
     @property
@@ -379,8 +352,6 @@ class App():
         self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
-        # Canvas keyboard event listeners
-        # self.canvas.on_key_down(self.key_callback)
 
         # Bind image settings widgets
         chkbox_normalize_display = find_widget_by_tag(self.ui, "normalize_display")
@@ -539,7 +510,6 @@ class App():
     def load_image_file(self, image_path):
         img = Image.open(image_path)
         if img.size != self.image_size:
-            #print("Resizing image to", self.image_size)
             img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
         img = np.array(img)
         if len(img.shape) == 2:
@@ -567,9 +537,7 @@ class App():
         channel_offset_slider.disabled = True
         channel_offset_slider.max = 0
 
-        # Put the image to the canvas
-        # img_data = (self.bg_hires * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # self.canvas[0].put_image_data(self.bg_display, 0, 0)
+        # Redraw the background with the new image
         self.redraw_background()
 
         # re-trigger image processing in already attached features
@@ -579,7 +547,6 @@ class App():
 
     def load_image_data(self, img_data):
         if img_data.shape[0:2] != self.image_size:
-            #print("Resizing image data to", self.image_size)
             img_data = self.resize_image_data(img_data)
         self.bg_hires = img_data
         self.bg_display = self.convert_image_data_for_display(
@@ -684,7 +651,6 @@ class App():
         
     
     def redraw_background(self):
-        #print("Redrawing background")
         if not self._image_is_loaded:
             return
         self.bg_display = self.convert_image_data_for_display(
@@ -811,7 +777,6 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
-        #print("Drawing")
         # Signal the compute thread to start processing
         self.compute_event.set()
         
@@ -854,10 +819,8 @@ class App():
             return  # Skip if we are processing too quickly
         self.last_draw_time = current_time  # Update the last event time
 
-        ##print("Mouse event:", x, y, pressed)
         with hold_canvas(self.canvas):
-            # Update probe position
-            # self.probe_x, self.probe_y = x, y
+            # Update probe position without triggering a draw
             self._probe_x = self.clamp_probe_x(x)
             self._probe_y = self.clamp_probe_y(y)
             if pressed == 2:
@@ -870,30 +833,22 @@ class App():
                 self.mouse_btn = 0
             # Update probe features, mappers, and render canvas
             # only draw when any of the probe params or unmuted has changed since the last draw
-            #print(self._probe_changed, self._unmuted_changed)
             if self._probe_changed or self._unmuted_changed:
                 self.draw()
-
-    # def key_callback(self, key, shift_key, ctrl_key, meta_key):
-    #     #print("Keyboard event:", key, shift_key, ctrl_key, meta_key)
 
 
     # GUI callbacks
 
     def toggle_dsp(self):
-        #print("Toggling audio")
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
-            # self.graph.start()
             self.audio_out.play()
             audio_switch.style.text_color = 'green'
         else:
-            # self.graph.stop()
             self.audio_out.stop()
             audio_switch.style.text_color = 'black'
 
     def toggle_record(self):
-        #print("Toggling recording")
         recording_toggle = find_widget_by_tag(self.ui, "recording_toggle")
         # Ensure the recording path ends with .wav
         self.recording_path = self.recording_path
@@ -905,7 +860,6 @@ class App():
             recording_toggle.style.text_color = 'black'
 
     def set_master_volume(self):
-        #print("Setting master volume")
         self.master_slider_db.set_value(self.master_volume)
 
 

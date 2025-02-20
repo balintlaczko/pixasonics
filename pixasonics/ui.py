@@ -494,7 +494,6 @@ class EnvelopeCard():
         duration.value = round(self.attack + self.decay + self.release, 4)
 
     def update(self):
-        #print("EnvelopeCard: Updating envelope")
         if self.envelope is not None:
             self.envelope.set_param_from_ui("attack", self.attack)
             self.envelope.set_param_from_ui("decay", self.decay)
@@ -975,11 +974,9 @@ class Model():
 
     @value.setter
     def value(self, new_val):
-        #print(f"Model: Setting value to {new_val}")
         self._value = new_val
         # If a widget is linked, update its value
         if self._widget and self._widget.value != new_val:
-            #print(f"Model: Updating widget value to {new_val}")
             self._widget.value = new_val
 
     def bind_widget(self, widget, extra_callback=None):
@@ -988,11 +985,9 @@ class Model():
         
         # Update the class attribute when the widget changes
         def on_widget_change(change, extra_callback):
-            #print(f"Model-bound widget change: {change}")
             if change['name'] == 'value' and change['new'] != self._value:
                 self._value = change['new']
                 if extra_callback is not None:
-                    #print("Calling extra callback")
                     extra_callback()
         
         widget.observe(lambda x : on_widget_change(x, extra_callback=extra_callback) , names='value')
