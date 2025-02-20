@@ -884,7 +884,10 @@ class App():
     def toggle_dsp(self):
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
-            self.audio_out.play()
+            try:
+                self.audio_out.play()
+            except sf.NodeAlreadyPlayingException:
+                pass
             audio_switch.style.text_color = 'green'
         else:
             self.audio_out.stop()
