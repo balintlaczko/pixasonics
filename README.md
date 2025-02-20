@@ -40,17 +40,17 @@ app.load_image_file("images/test.jpg")
 # create a Feature that will report the mean value of the red channel
 mean_red = MeanChannelValue(filter_channels=0, name="MeanRed")
 # attach the feature to the app
-app.attach_feature(mean_red)
+app.attach(mean_red)
 
 # create a Theremin synth
 theremin = Theremin(name="MySine")
 # attach the Theremin to the app
-app.attach_synth(theremin)
+app.attach(theremin)
 
 # create a Mapper that will map the mean red pixel value to Theremin frequency
 red2freq = Mapper(mean_red, theremin["frequency"], exponent=2, name="Red2Freq")
 # attach the Mapper to the app
-app.attach_mapper(red2freq)
+app.attach(red2freq)
 ```
 
 # Toolbox Structure
