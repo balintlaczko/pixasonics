@@ -3,6 +3,8 @@ import signalflow as sf
 from .utils import samps2mix, broadcast_params, array2str, ParamSliderDebouncer
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
+PARAM_SLIDER_DEBOUNCE_TIME = 0.05
+
 class Theremin(sf.Patch):
     def __init__(self, frequency=440, amplitude=0.5, panning=0, name="Theremin"):
         super().__init__()
@@ -88,7 +90,7 @@ class Theremin(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
-        self.debouncer = ParamSliderDebouncer(0.05)
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
 
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
@@ -322,7 +324,7 @@ class Oscillator(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
-        self.debouncer = ParamSliderDebouncer(0.05)
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
 
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
@@ -502,7 +504,7 @@ class FilteredNoise(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
-        self.debouncer = ParamSliderDebouncer(0.05)
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
 
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
@@ -774,7 +776,7 @@ class SimpleFM(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
-        self.debouncer = ParamSliderDebouncer(0.05)
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
 
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
