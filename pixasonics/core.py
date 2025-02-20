@@ -36,7 +36,8 @@ class App():
             self,
             image_size: tuple[int] = (500, 500),
             fps: int = 60,
-            nrt: bool = False
+            nrt: bool = False,
+            # output_buffer_size: int = 480
             ):
         
         self.image_size = image_size
@@ -75,6 +76,7 @@ class App():
         self._unmuted = False
         self._unmuted_on_last_draw = False
         self._nrt = nrt
+        self._output_buffer_size = 480 # output_buffer_size
         self._normalize_display = Model(False)
         self._normalize_display_global = Model(False)
         self._display_channel_offset = Model(0)
@@ -288,6 +290,24 @@ class App():
     @property
     def _unmuted_changed(self):
         return self._unmuted != self._unmuted_on_last_draw
+    
+    @property
+    def output_buffer_size(self):
+        if self.graph is not None:
+            return self.graph.output_buffer_size
+        else:
+            return None
+        
+    # @output_buffer_size.setter
+    # def output_buffer_size(self, value):
+    #     print(f"Setting output buffer size to {value}")
+    #     self._output_buffer_size = value
+    #     print(f"Destroying audio graph")
+    #     self.graph.destroy()
+    #     print(f"Creating new audio graph")
+    #     self.create_audio_graph()
+    #     # print(f"Re-registering app")
+    #     # AppRegistry().notify_reregister(self)
 
     @property
     def interaction_mode(self):
@@ -398,7 +418,9 @@ class App():
         self.graph = sf.AudioGraph.get_shared_graph()
         if self.graph is None:
             output_device = sf.AudioOut_Dummy(2) if self.nrt else None
-            self.graph = sf.AudioGraph(start=True, output_device=output_device)
+            config = sf.AudioGraphConfig()
+            config.output_buffer_size = self._output_buffer_size
+            self.graph = sf.AudioGraph(config=config, start=True, output_device=output_device)
 
         # Master volume
         self.master_slider_db = sf.Constant(0)
