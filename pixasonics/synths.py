@@ -5,7 +5,12 @@ from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
 PARAM_SLIDER_DEBOUNCE_TIME = 0.05
 
-class Theremin(sf.Patch):
+class Synth(sf.Patch):
+    def __init__(self):
+        super().__init__()
+
+
+class Theremin(Synth):
     def __init__(self, frequency=440, amplitude=0.5, panning=0, name="Theremin"):
         super().__init__()
         self.name = name
@@ -139,7 +144,7 @@ class Theremin(sf.Patch):
         return f"Theremin {self.id}: {self.name}"
     
 
-class Oscillator(sf.Patch):
+class Oscillator(Synth):
     def __init__(
             self, 
             frequency=440, 
@@ -372,7 +377,7 @@ class Oscillator(sf.Patch):
         return f"Oscillator {self.id}: {self.name}"
     
 
-class FilteredNoise(sf.Patch):
+class FilteredNoise(Synth):
     def __init__(
             self,
             filter_type="band_pass", # can be 'low_pass', 'band_pass', 'high_pass', 'notch', 'peak', 'low_shelf', 'high_shelf'
@@ -552,7 +557,7 @@ class FilteredNoise(sf.Patch):
         return f"FilteredNoise {self.id}: {self.name}"
     
 
-class SimpleFM(sf.Patch):
+class SimpleFM(Synth):
     def __init__(
             self, 
             carrier_frequency=440,

@@ -1,7 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
-from .synths import Envelope
+from .synths import Synth, Envelope
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
 import time
@@ -497,6 +497,26 @@ class App():
             mappers_carousel.children = [child for child in mappers_carousel.children if child.tag != f"mapper_{mapper.id}"]
             mapper._ui.app = None
             mapper._app = None
+
+    def attach(self, obj):
+        if isinstance(obj, Feature):
+            self.attach_feature(obj)
+        elif isinstance(obj, Mapper):
+            self.attach_mapper(obj)
+        elif isinstance(obj, Synth):
+            self.attach_synth(obj)
+        else:
+            raise ValueError(f"Cannot attach object of type {type(obj)}")
+        
+    def detach(self, obj):
+        if isinstance(obj, Feature):
+            self.detach_feature(obj)
+        elif isinstance(obj, Mapper):
+            self.detach_mapper(obj)
+        elif isinstance(obj, Synth):
+            self.detach_synth(obj)
+        else:
+            raise ValueError(f"Cannot detach object of type {type(obj)}")
     
     def compute_features(self, probe_mat):
         for feature in self.features:
