@@ -1,7 +1,8 @@
 from ipycanvas import Canvas, hold_canvas
 from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons, Checkbox
 from math import log10
-from .utils import array2str
+from .utils import array2str, scale_array_exp
+import numpy as np
 
 class MapperCard():
     def __init__(
@@ -961,6 +962,81 @@ class AppUI():
                 width='auto', 
                 height='auto', 
                 justify_content='center'))
+        
+
+class ExponentCanvas():
+    def __init__(self, width=200, height=200, exponent=1):
+        self.width = width
+        self.height = height
+        self._exponent = exponent
+        self.canvas = Canvas(width=width, height=height)
+        self.draw()
+
+    def __call__(self):
+        return self.canvas
+    
+    @property
+    def exponent(self):
+        return self._exponent
+    
+    @exponent.setter
+    def exponent(self, value):
+        self._exponent = value
+        self.draw()
+
+    def draw(self):
+        with hold_canvas(self.canvas):
+            self.canvas.clear()
+            x = np.linspace(0, 1, self.width)
+            y = scale_array_exp(x, 0, 1, 0, 1, self._exponent)
+            y = 1 - y
+            y = y * self.height
+            self.canvas.fill_style = "black"
+            self.canvas.fill_rects(x * self.width, y, 1, self.height)
+
+
+class ExponentPlot():
+    def __init__(self, width=1000, height=200, exponent=1):
+        self.width = width
+        self.height = height
+        self._exponent = exponent
+        
+        self.create_ui()
+
+    def __call__(self):
+        return self.card
+    
+    @property
+    def exponent(self):
+        return self._exponent
+    
+    @exponent.setter
+    def exponent(self, value):
+        self._exponent = value
+        self.card.children[1].value = value
+    
+    def create_ui(self):
+        canvas = ExponentCanvas(self.width, self.height, self.exponent)
+        exp_slider = FloatLogSlider(
+            value=self.exponent,
+            base=10,
+            min=log10(0.01),
+            max=log10(100),
+            step=0.00001,
+            description='Exponent:',
+            continuous_update=True,
+            readout_format='.4f',
+            layout=Layout(padding='20px 0px 10px 0px')
+        )
+        exp_slider.observe(lambda change: setattr(canvas, "exponent", change.new), names="value")
+        self.card = VBox(
+            [canvas(), exp_slider],
+            layout=Layout(
+                padding='10px',
+                justify_content='center',
+                align_items='center',
+                width='auto',)
+        )
 
 
 class Model():
