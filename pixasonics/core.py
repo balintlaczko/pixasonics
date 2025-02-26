@@ -145,6 +145,14 @@ class App():
         self.redraw_background()
 
     @property
+    def image(self):
+        return self.bg_hires
+    
+    @property
+    def image_displayed(self):
+        return self.bg_display
+
+    @property
     def nrt(self):
         return self._nrt
     
