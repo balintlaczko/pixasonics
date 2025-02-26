@@ -144,6 +144,8 @@ def test_filter_matrix():
 
 def broadcast_params(*param_lists):
     """Helper function to broadcast and interpolate all param lists to the same length."""
+    # if an input is a numpy array, convert it to a list
+    param_lists = [p.tolist() if isinstance(p, np.ndarray) else p for p in param_lists]
     # if an input list is just a single value, convert it to a list
     param_lists = [p if isinstance(p, list) else [p] for p in param_lists]
     max_len = max([len(p) for p in param_lists])
