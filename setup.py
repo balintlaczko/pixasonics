@@ -3,10 +3,13 @@ from setuptools import setup, find_packages
 # Read the README file
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
+    to_change = "pixasonics/figures/interface_screenshot.png"
+    change_to = "https://raw.githubusercontent.com/balintlaczko/pixasonics/main/pixasonics/figures/interface_screenshot.png"
+    long_description = long_description.replace(to_change, change_to)
 
 setup(
     name='pixasonics',
-    version='0.1.4.1',
+    version='0.1.4.2',
     author='Balint Laczko',
     author_email='balint.laczko@imv.uio.no',
     description='An Image Sonification Toolbox',
