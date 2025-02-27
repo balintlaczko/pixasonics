@@ -1,9 +1,16 @@
 import numpy as np
 import signalflow as sf
-from .utils import samps2mix, broadcast_params, array2str
+from .utils import broadcast_params, array2str, ParamSliderDebouncer
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 
-class Theremin(sf.Patch):
+PARAM_SLIDER_DEBOUNCE_TIME = 0.05
+
+class Synth(sf.Patch):
+    def __init__(self):
+        super().__init__()
+
+
+class Theremin(Synth):
     def __init__(self, frequency=440, amplitude=0.5, panning=0, name="Theremin"):
         super().__init__()
         self.name = name
@@ -71,9 +78,6 @@ class Theremin(sf.Patch):
         self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
         self.params["panning"]["buffer_player"] = self.panning_value
         
-        # smooth_time = 0.05
-        self.smooth_n_samps = 24000
-        mix_val = samps2mix(self.smooth_n_samps)
         graph = sf.AudioGraph.get_shared_graph()
         mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
         freq_smooth = sf.Smooth(self.frequency_value, mix_val)
@@ -88,12 +92,30 @@ class Theremin(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
-        if not from_slider:
+        if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
-            # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
-            slider.value = value if self.num_channels == 1 else array2str(value)
+            slider.unobserve_all()
+            slider_value = value if self.num_channels == 1 else array2str(value)
+            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+        elif not from_slider and self.num_channels > 1:
+            slider = find_widget_by_tag(self.ui, name)
+            slider.value = array2str(value)
+
+    def update_slider(self, slider, value):
+        slider.unobserve_all()
+        slider.value = value
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value")
+        
 
     def reset_to_default(self):
         for param in self.params:
@@ -119,7 +141,7 @@ class Theremin(sf.Patch):
         return f"Theremin {self.id}: {self.name}"
     
 
-class Oscillator(sf.Patch):
+class Oscillator(Synth):
     def __init__(
             self, 
             frequency=440, 
@@ -304,12 +326,29 @@ class Oscillator(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
-        if not from_slider:
+        if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
-            # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
-            slider.value = value if self.num_channels == 1 else array2str(value)
+            slider.unobserve_all()
+            slider_value = value if self.num_channels == 1 else array2str(value)
+            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+        elif not from_slider and self.num_channels > 1:
+            slider = find_widget_by_tag(self.ui, name)
+            slider.value = array2str(value)
+    
+    def update_slider(self, slider, value):
+        slider.unobserve_all()
+        slider.value = value
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value")
 
     def reset_to_default(self):
         for param in self.params:
@@ -335,7 +374,7 @@ class Oscillator(sf.Patch):
         return f"Oscillator {self.id}: {self.name}"
     
 
-class FilteredNoise(sf.Patch):
+class FilteredNoise(Synth):
     def __init__(
             self,
             filter_type="band_pass", # can be 'low_pass', 'band_pass', 'high_pass', 'notch', 'peak', 'low_shelf', 'high_shelf'
@@ -467,12 +506,29 @@ class FilteredNoise(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
-        if not from_slider:
+        if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
-            # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
-            slider.value = value if self.num_channels == 1 else array2str(value)
+            slider.unobserve_all()
+            slider_value = value if self.num_channels == 1 else array2str(value)
+            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+        elif not from_slider and self.num_channels > 1:
+            slider = find_widget_by_tag(self.ui, name)
+            slider.value = array2str(value)
+    
+    def update_slider(self, slider, value):
+        slider.unobserve_all()
+        slider.value = value
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value")
 
     def reset_to_default(self):
         for param in self.params:
@@ -498,7 +554,7 @@ class FilteredNoise(sf.Patch):
         return f"FilteredNoise {self.id}: {self.name}"
     
 
-class SimpleFM(sf.Patch):
+class SimpleFM(Synth):
     def __init__(
             self, 
             carrier_frequency=440,
@@ -722,12 +778,29 @@ class SimpleFM(sf.Patch):
         self.id = str(id(self))
         self.create_ui()
 
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
-        if not from_slider:
+        if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
-            # TODO: avoid double setting here (when slider.value changes it will also call set_input_buf)
-            slider.value = value if self.num_channels == 1 else array2str(value)
+            slider.unobserve_all()
+            slider_value = value if self.num_channels == 1 else array2str(value)
+            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+        elif not from_slider and self.num_channels > 1:
+            slider = find_widget_by_tag(self.ui, name)
+            slider.value = array2str(value)
+    
+    def update_slider(self, slider, value):
+        slider.unobserve_all()
+        slider.value = value
+        slider.observe(
+            lambda change: self.set_input_buf(
+                    change["owner"].tag, 
+                    change["new"],
+                    from_slider=True
+                ), 
+                names="value")
 
     def reset_to_default(self):
         for param in self.params:

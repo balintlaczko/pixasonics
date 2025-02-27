@@ -13,29 +13,100 @@ class Feature():
             filter_channels=None,
             filter_layers=None,
             target_dim=2, # channel dim by default
-            reduce_method="mean", # can be "mean", "max", "min", "sum", "std", "var", "median", 
+            reduce_method="mean", # can be "mean", "max", "min", "sum", "std", "var", "median"
             name="Feature"):
+        # Init private attrs
+        self._filter_rows = None
+        self._filter_columns = None
+        self._filter_channels = None
+        self._filter_layers = None
+        self._target_dim = None
+        self._reduce_method = None
+        self._name = None
+        self._app = None
+        self._id = None
+        # Call setters
         self.filter_rows = filter_rows
         self.filter_columns = filter_columns
         self.filter_channels = filter_channels
         self.filter_layers = filter_layers
-
         self.target_dim = target_dim
-        assert self.target_dim in [0, 1, 2, 3], "target_dim must be 0, 1, 2, or 3"
-        
         self.reduce_method = reduce_method
-        assert self.reduce_method in ["mean", "max", "min", "sum", "std", "var", "median"], "Unknown reduce method"
-        
         self.name = name
-
+        self.id = str(id(self))
+        # Init public attrs
         self.features = sf.Buffer(1, 1) # default to 1 feature/channel
         self.min = np.ones_like(self.features.data) * 1e6
         self.max = np.ones_like(self.features.data) * -1e6
-
-        self._app = None
-
-        self.id = str(id(self))
+        # Create the UI card
         self.create_ui()
+
+    @property
+    def id(self):
+        return self._id
+    
+    @id.setter
+    def id(self, id):
+        assert isinstance(id, str), "id must be a string"
+        self._id = id
+    
+    @property
+    def name(self):
+        return self._name
+    
+    @name.setter
+    def name(self, name):
+        assert isinstance(name, str), "name must be a string"
+        self._name = name
+    
+    @property
+    def filter_rows(self):
+        return self._filter_rows
+    
+    @filter_rows.setter
+    def filter_rows(self, filter_rows):
+        if filter_rows is not None:
+            assert isinstance(filter_rows, (int, slice, list, str)), "filter_rows must be int, slice, list, str or None"
+        self._filter_rows = filter_rows
+
+    @property
+    def filter_columns(self):
+        return self._filter_columns
+    
+    @filter_columns.setter
+    def filter_columns(self, filter_columns):
+        if filter_columns is not None:
+            assert isinstance(filter_columns, (int, slice, list, str)), "filter_columns must be int, slice, list, str or None"
+        self._filter_columns = filter_columns
+
+    @property
+    def filter_channels(self):
+        return self._filter_channels
+    
+    @filter_channels.setter
+    def filter_channels(self, filter_channels):
+        if filter_channels is not None:
+            assert isinstance(filter_channels, (int, slice, list, str)), "filter_channels must be int, slice, list, str or None"
+        self._filter_channels = filter_channels
+
+    @property
+    def filter_layers(self):
+        return self._filter_layers
+    
+    @filter_layers.setter
+    def filter_layers(self, filter_layers):
+        if filter_layers is not None:
+            assert isinstance(filter_layers, (int, slice, list, str)), "filter_layers must be int, slice, list, str or None"
+        self._filter_layers = filter_layers
+
+    @property
+    def target_dim(self):
+        return self._target_dim
+    
+    @target_dim.setter
+    def target_dim(self, target_dim):
+        assert target_dim in [0, 1, 2, 3], "target_dim must be 0, 1, 2, or 3"
+        self._target_dim = target_dim
 
     @property
     def app(self):
@@ -44,10 +115,21 @@ class Feature():
     @app.setter
     def app(self, app):
         self._app = app
-        self.process_image(app.bg_hires)
+        self._process_image(app.bg_hires)
 
     @property
+    def reduce_method(self):
+        return self._reduce_method
+    
+    @reduce_method.setter
+    def reduce_method(self, reduce_method):
+        assert reduce_method in ["mean", "max", "min", "sum", "std", "var", "median"], \
+            "Unknown reduce method string. Must be one of: mean, max, min, sum, std, var, median"
+        self._reduce_method = reduce_method
+
+    @property 
     def reduce(self):
+        """Get the reduction function based on reduce_method string"""
         if self.reduce_method == "mean":
             return np.mean
         elif self.reduce_method == "max":
@@ -62,11 +144,9 @@ class Feature():
             return np.var
         elif self.reduce_method == "median":
             return np.median
-        else:
-            raise ValueError(f"Unknown reduce method: {self.reduce_method}")
         
     @property
-    def axis(self):
+    def reduce_axis(self):
         return tuple(i for i in range(4) if i != self.target_dim)
 
     def __call__(self, mat):
@@ -78,19 +158,37 @@ class Feature():
             self.filter_layers
         )
         computed = self.compute(mat_filtered)
+        # Here we need to assert that the computed shape is 1D (num_features,)
+        assert len(computed.shape) == 1, f"Computed shape is not 1D: {computed.shape}"
         if computed.shape[0] != self.num_features:
-            self.initialize(mat_filtered)
-        self.features.data[:, :] = self.compute(mat_filtered)
+            # self.initialize(mat_filtered)
+            self.initialize(computed) # TODO: this means it will always take the local minmax
+        self.features.data[:, :] = computed[..., None] # add the sample dimension, so it is (num_features, 1)
 
         self.update_minmax() # then we have to keep a running minmax
         self.update_ui()
     
     def compute(self, mat):
-        return self.reduce(mat, axis=self.axis)[..., None]
+        """Compute the feature from the matrix, override this method for custom computation.
+        The custom computation should return a 1D array of shape (num_features,)
+        """
+        return self.reduce(mat, axis=self.reduce_axis)
     
     
     def process_image(self, mat):
-        """By default, this will compute global min and max. Override this method for custom processing.
+        """Override this method for custom processing of the App's whole image, called upon attachment to the App.
+        The custom processing should return a matrix of the same shape as the input.
+        This will be used to calculate the number of features, and the min and max values along the axis defined by self.target_dim.
+        """
+        return mat
+
+
+    def _process_image(self, mat):
+        """This is called when the Feature is attached to an App, where the App's full image is passed in.
+        Override the process_image method for custom processing.
+        Here we filter the matrix based on all self.filter_* attributes, 
+        process the image with self.process_image, then compute min and max, initialize the feature Buffer,
+        and update the ui card.
         Image arrays are assumed to have a shape of (H, W, C, L) or (H, W, C) where H is height, 
         W is width, C is channels, and L is layer.
         """
@@ -101,15 +199,21 @@ class Feature():
             self.filter_channels,
             self.filter_layers
         )
-        self.initialize(mat_filtered)
+        mat_processed = self.process_image(mat_filtered)
+        
+        self.initialize(mat_processed)
         self.update_ui()
 
 
     def initialize(self, mat):
-        self.min = np.min(mat, axis=self.axis)[..., None]
-        self.max = np.max(mat, axis=self.axis)[..., None]
-        # set number of features to the number of channels
-        self.num_features = self.min.shape[0]
+        if len(mat.shape) == 4:
+            self.min = np.min(mat, axis=self.reduce_axis)[..., None]
+            self.max = np.max(mat, axis=self.reduce_axis)[..., None]
+            self.num_features = self.min.shape[0]
+        else:
+            self.min = np.min(mat)[..., None]
+            self.max = np.max(mat)[..., None]
+            self.num_features = mat.shape[0]
         self.features = sf.Buffer(self.num_features, 1)
 
         

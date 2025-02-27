@@ -1,26 +1,53 @@
 from .features import Feature
-from .utils import scale_array_exp, frame2sec, sec2frame, resize_interp, samps2mix
+from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
-from .synths import Envelope
+from .synths import Synth, Envelope
 from ipycanvas import hold_canvas, MultiCanvas
 from IPython.display import display
 import time
 import numpy as np
 import signalflow as sf
 from PIL import Image
+import threading
 
 
+class AppRegistry:
+    _instance = None
+    _apps = set()
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(AppRegistry, cls).__new__(cls)
+        return cls._instance
+
+    def register(self, app):
+        self._apps.add(app)
+
+    def unregister(self, app):
+        self._apps.discard(app)
+
+    def notify_reregister(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app.create_audio_graph()
 
 class App():
     def __init__(
             self,
             image_size: tuple[int] = (500, 500),
             fps: int = 60,
-            nrt: bool = False
+            nrt: bool = False,
+            # output_buffer_size: int = 480,
+            headless: bool = False,
             ):
         
         self.image_size = image_size
 
+        # threading
+        self.compute_thread = None
+        self.compute_lock = threading.Lock()
+        self.compute_event = threading.Event()
+        self.stop_event = threading.Event()
 
         # Global state variables
         self.is_drawing = False
@@ -32,10 +59,14 @@ class App():
         self._fps = fps
         self._refresh_interval = 1 / fps
         self._probe_x = 0
+        self._probe_x_on_last_draw = 0
         self._probe_y = 0
+        self._probe_y_on_last_draw = 0
         self._mouse_btn = 0
         self._probe_width = Model(50)
+        self._probe_width_on_last_draw = 50
         self._probe_height = Model(50)
+        self._probe_height_on_last_draw = 50
         self._probe_follows_idle_mouse = Model(False)
         self._interaction_mode = Model("Hold")
         self._last_mouse_down_time = 0
@@ -44,20 +75,29 @@ class App():
         self._recording = Model(False)
         self._recording_path = Model("recording.wav")
         self._unmuted = False
+        self._unmuted_on_last_draw = False
         self._nrt = nrt
+        self._output_buffer_size = 480 # output_buffer_size
+        self._sample_rate = 48000 # sample_rate
         self._normalize_display = Model(False)
         self._normalize_display_global = Model(False)
         self._display_channel_offset = Model(0)
         self._display_layer_offset = Model(0)
         self._image_is_loaded = False
+        self._headless = headless
 
         # Containers for features, mappers, and synths
         self.features = []
         self.mappers = []
         self.synths = []
 
-        self.create_ui()
+        self.ui = None
+        if not self._headless:
+            self.create_ui()
         self.create_audio_graph()
+        self.start_compute_thread()
+
+        AppRegistry().register(self)
 
     @property
     def fps(self):
@@ -105,13 +145,23 @@ class App():
         self.redraw_background()
 
     @property
+    def image(self):
+        return self.bg_hires
+    
+    @property
+    def image_displayed(self):
+        return self.bg_display
+
+    @property
     def nrt(self):
         return self._nrt
     
     @nrt.setter
     def nrt(self, value):
+        changed = value != self._nrt
         self._nrt = value
-        self.create_audio_graph()
+        if changed:
+            self.create_audio_graph()
         for mapper in self.mappers:
             mapper.nrt = value
 
@@ -123,15 +173,23 @@ class App():
     def probe_follows_idle_mouse(self, value):
         self._probe_follows_idle_mouse.value = value
 
+    def clamp_probe_x(self, value):
+        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+        x_clamped = np.clip(value, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
+        return int(round(x_clamped))
+    
+    def clamp_probe_y(self, value):
+        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
+        y_clamped = np.clip(value, self.probe_height//2, self.image_size[0]-1-self.probe_height//2)
+        return int(round(y_clamped))
+
     @property
     def probe_x(self):
         return self._probe_x
     
     @probe_x.setter
     def probe_x(self, value):
-        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        x_clamped = np.clip(value, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
-        self._probe_x = int(round(x_clamped))
+        self._probe_x = self.clamp_probe_x(value)
         if not self._nrt:
             self.draw()
     
@@ -141,15 +199,16 @@ class App():
     
     @probe_y.setter
     def probe_y(self, value):
-        # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
-        y_clamped = np.clip(value, self.probe_height//2, self.image_size[0]-1-self.probe_height//2)
-        self._probe_y = int(round(y_clamped))
+        self._probe_y = self.clamp_probe_y(value)
         if not self._nrt:
             self.draw()
 
     def update_probe_xy(self):
-        self.probe_x = self.probe_x
-        self.probe_y = self.probe_y
+        # Apply the clamped probe position without triggering a draw
+        self._probe_x = self.clamp_probe_x(self.probe_x)
+        self._probe_y = self.clamp_probe_y(self.probe_y)
+        if not self._nrt:
+            self.draw()
 
     @property
     def mouse_btn(self):
@@ -182,6 +241,15 @@ class App():
         self._probe_height.value = value
         # Update mouse xy to keep it in the middle of the probe
         self.update_probe_xy()
+
+    @property
+    def _probe_changed(self):
+        return (
+            self._probe_x != self._probe_x_on_last_draw
+            or self._probe_y != self._probe_y_on_last_draw
+            or self._probe_width != self._probe_width_on_last_draw
+            or self._probe_height != self._probe_height_on_last_draw
+        )
 
     @property
     def master_volume(self):
@@ -218,7 +286,9 @@ class App():
     def recording_path(self, value):
         if not value.endswith(".wav"):
             value = value + ".wav"
-        self._recording_path.value = value
+        # only update if the value is different
+        if value != self._recording_path.value:
+            self._recording_path.value = value
 
     @property
     def unmuted(self):
@@ -232,8 +302,34 @@ class App():
         else:
             self.master_envelope.off()
 
-    def enable_dsp(self, state: bool):
-        self.master_envelope.on() if state else self.master_envelope.off()
+    @property
+    def _unmuted_changed(self):
+        return self._unmuted != self._unmuted_on_last_draw
+    
+    @property
+    def output_buffer_size(self):
+        if self.graph is not None:
+            return self.graph.output_buffer_size
+        else:
+            return None
+        
+    # @output_buffer_size.setter
+    # def output_buffer_size(self, value):
+    #     print(f"Setting output buffer size to {value}")
+    #     self._output_buffer_size = value
+    #     print(f"Destroying audio graph")
+    #     self.graph.destroy()
+    #     print(f"Creating new audio graph")
+    #     self.create_audio_graph()
+    #     # print(f"Re-registering app")
+    #     # AppRegistry().notify_reregister(self)
+
+    @property
+    def sample_rate(self):
+        if self.graph is not None:
+            return self.graph.sample_rate
+        else:
+            return None
 
     @property
     def interaction_mode(self):
@@ -242,6 +338,47 @@ class App():
     @interaction_mode.setter
     def interaction_mode(self, value):
         self._interaction_mode.value = value.capitalize()
+
+
+    def start_compute_thread(self):
+        if self.compute_thread is None or not self.compute_thread.is_alive():
+            self.stop_event.clear()
+            self.compute_thread = threading.Thread(target=self.compute_loop, daemon=True)
+            self.compute_thread.start()
+
+    def stop_compute_thread(self):
+        self.stop_event.set()
+        self.compute_event.set()
+        if self.compute_thread is not None:
+            self.compute_thread.join()
+
+    def compute_loop(self):
+        while not self.stop_event.is_set():
+            self.compute_event.wait()
+            self.compute_event.clear()
+            with self.compute_lock:
+                probe_mat = self.get_probe_matrix()
+                self.compute_features(probe_mat)
+                if self.unmuted:
+                    self.compute_mappers()
+            time.sleep(0.01)  # Small sleep to prevent busy-waiting
+
+    def cleanup(self):
+        self.stop_compute_thread()
+        try:
+            self.audio_out.stop()
+        except sf.NodeNotPlayingException:
+            pass
+        AppRegistry().unregister(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.cleanup()
+
+    def __del__(self):
+        self.cleanup()
     
 
     def create_ui(self):
@@ -271,8 +408,6 @@ class App():
         self.canvas.on_mouse_move(lambda x, y: self.mouse_callback(x, y, -1))  # Triggered during mouse movement (keeps track of mouse button state)
         self.canvas.on_mouse_down(lambda x, y: self.mouse_callback(x, y, pressed=2))  # When mouse button pressed
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
-        # Canvas keyboard event listeners
-        # self.canvas.on_key_down(self.key_callback)
 
         # Bind image settings widgets
         chkbox_normalize_display = find_widget_by_tag(self.ui, "normalize_display")
@@ -316,19 +451,18 @@ class App():
     
 
     def create_audio_graph(self):
+        # Get or create the shared audio graph
         self.graph = sf.AudioGraph.get_shared_graph()
-        output_device = sf.AudioOut_Dummy(2) if self.nrt else None
-        if self.graph is not None:
+        if self.graph is not None and self.nrt:
             self.graph.destroy()
-        self.graph = sf.AudioGraph(
-            start=self.nrt,
-            output_device=output_device
-            )
+            self.graph = None
+        if self.graph is None:
+            output_device = sf.AudioOut_Dummy(2, buffer_size=self._output_buffer_size) if self.nrt else None
+            config = sf.AudioGraphConfig()
+            config.output_buffer_size = self._output_buffer_size
+            config.sample_rate = self._sample_rate # will have no effect in NRT mode, signalflow limitation: https://github.com/ideoforms/signalflow/issues/130
+            self.graph = sf.AudioGraph(config=config, start=True, output_device=output_device)
 
-        # DSP switch
-        self.dsp_switch_buf = sf.Buffer(1, 1)
-        self.dsp_switch_buf.data[0][0] = 1 if self.nrt else 0
-        self.dsp_switch = sf.BufferPlayer(self.dsp_switch_buf, loop=True)
 
         # Master volume
         self.master_slider_db = sf.Constant(0)
@@ -345,10 +479,11 @@ class App():
         )
         self.master_envelope_bus = sf.Bus(1)
         self.master_envelope_bus.add_input(self.master_envelope.output)
-        # add ui to the app ui
-        audio_settings = find_widget_by_tag(self.ui, "audio_settings")
-        # always keep the first 2 children only, and replace the rest with this env ui
-        audio_settings.children = [*audio_settings.children[:2], self.master_envelope.ui]
+        if not self._headless:
+            # add ui to the app ui
+            audio_settings = find_widget_by_tag(self.ui, "audio_settings")
+            # always keep the first 2 children only, and replace the rest with this env ui
+            audio_settings.children = [*audio_settings.children[:2], self.master_envelope.ui]
 
         # Main bus
         self.bus = sf.Bus(num_channels=2)
@@ -362,70 +497,97 @@ class App():
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
-        # Connect the audio graph
-        self.audio_out.play()
-
         # in NRT mode, unmute the global envelope
         if self.nrt:
+            self.audio_out.play()
             self.master_envelope.on()
 
         # start graph if audio is enabled
         if self.audio > 0 and not self.nrt:
-            self.graph.start()
+            self.audio_out.play()
+            self.unmuted = self.unmuted # call the setter to update the envelope state
 
     
     def attach_synth(self, synth):
-        print(f"Attaching {synth}")
+        #print(f"Attaching {synth}")
         if synth not in self.synths:
             self.synths.append(synth)
             self.bus.add_input(synth.output)
-            synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
-            synths_carousel.children = list(synths_carousel.children) + [synth.ui]
-            synth._ui.app = self
+            if not self._headless:
+                synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
+                synths_carousel.children = list(synths_carousel.children) + [synth.ui]
+                synth._ui.app = self
 
     def detach_synth(self, synth):
-        print(f"Detaching {synth}")
+        #print(f"Detaching {synth}")
         if synth in self.synths:
             self.synths.remove(synth)
             self.bus.remove_input(synth.output)
-            synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
-            synths_carousel.children = [child for child in synths_carousel.children if child.tag != f"synth_{synth.id}"]
-            synth._ui.app = None
+            if not self._headless:
+                synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
+                synths_carousel.children = [child for child in synths_carousel.children if child.tag != f"synth_{synth.id}"]
+                synth._ui.app = None
     
     def attach_feature(self, feature):
-        print(f"Attaching {feature}")
+        #print(f"Attaching {feature}")
         if feature not in self.features:
             self.features.append(feature)
-            features_carousel = find_widget_by_tag(self.ui, "features_carousel")
-            features_carousel.children = list(features_carousel.children) + [feature.ui]
-            feature._ui.app = self
             feature.app = self
+            if not self._headless:
+                features_carousel = find_widget_by_tag(self.ui, "features_carousel")
+                features_carousel.children = list(features_carousel.children) + [feature.ui]
+                feature._ui.app = self
 
     def detach_feature(self, feature):
-        print(f"Detaching {feature}")
+        #print(f"Detaching {feature}")
         if feature in self.features:
             self.features.remove(feature)
-            features_carousel = find_widget_by_tag(self.ui, "features_carousel")
-            features_carousel.children = [child for child in features_carousel.children if child.tag != f"feature_{feature.id}"]
-            feature._ui.app = None
+            if not self._headless:
+                features_carousel = find_widget_by_tag(self.ui, "features_carousel")
+                features_carousel.children = [child for child in features_carousel.children if child.tag != f"feature_{feature.id}"]
+                feature._ui.app = None
     
     def attach_mapper(self, mapper):
-        print(f"Attaching {mapper}")
+        #print(f"Attaching {mapper}")
         if mapper not in self.mappers:
             self.mappers.append(mapper)
-            mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
-            mappers_carousel.children = list(mappers_carousel.children) + [mapper.ui]
-            mapper._ui.app = self
             mapper._app = self
+            if not self._headless:
+                mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
+                mappers_carousel.children = list(mappers_carousel.children) + [mapper.ui]
+                mapper._ui.app = self
+            # evaluate once to trigger JIT compilation
+            mapper()
 
     def detach_mapper(self, mapper):
-        print(f"Detaching {mapper}")
+        #print(f"Detaching {mapper}")
         if mapper in self.mappers:
             self.mappers.remove(mapper)
-            mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
-            mappers_carousel.children = [child for child in mappers_carousel.children if child.tag != f"mapper_{mapper.id}"]
-            mapper._ui.app = None
             mapper._app = None
+            if not self._headless:
+                mappers_carousel = find_widget_by_tag(self.ui, "mappers_carousel")
+                mappers_carousel.children = [child for child in mappers_carousel.children if child.tag != f"mapper_{mapper.id}"]
+                mapper._ui.app = None
+
+    def attach(self, obj):
+        if isinstance(obj, Feature):
+            self.attach_feature(obj)
+        elif isinstance(obj, Mapper):
+            self.attach_mapper(obj)
+        elif isinstance(obj, Synth):
+            self.attach_synth(obj)
+        else:
+            raise ValueError(f"Cannot attach object of type {type(obj)}")
+        
+    def detach(self, obj):
+        if isinstance(obj, Feature):
+            self.detach_feature(obj)
+        elif isinstance(obj, Mapper):
+            self.detach_mapper(obj)
+        elif isinstance(obj, Synth):
+            self.detach_synth(obj)
+        else:
+            raise ValueError(f"Cannot detach object of type {type(obj)}")
     
     def compute_features(self, probe_mat):
         for feature in self.features:
@@ -439,38 +601,38 @@ class App():
     def load_image_file(self, image_path):
         img = Image.open(image_path)
         if img.size != self.image_size:
-            print("Resizing image to", self.image_size)
             img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
         img = np.array(img)
         if len(img.shape) == 2:
             img = img[..., None, None] # add channel and layer dimensions if single-channel
         elif len(img.shape) == 3:
             img = img[..., None] # add layer dimension if 3-channel
-        print ("Image shape:", img.shape)
+        # print ("Image shape:", img.shape)
         self.bg_hires = img
-        self.bg_display = self.convert_image_data_for_display(
-            self.bg_hires, 
-            normalize=self.normalize_display, 
-            global_normalize=self.normalize_display_global)
+        self.bg_display = None
+        if not self._headless:
+            self.bg_display = self.convert_image_data_for_display(
+                self.bg_hires, 
+                normalize=self.normalize_display, 
+                global_normalize=self.normalize_display_global)
         
         self._image_is_loaded = True
 
-        # Set layer offset to 0 and disable the slider
-        self._display_layer_offset.value = 0
-        layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-        layer_offset_slider.disabled = True
-        layer_offset_slider.max = 0
+        if not self._headless:
+            # Set layer offset to 0 and disable the slider
+            self._display_layer_offset.value = 0
+            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+            layer_offset_slider.disabled = True
+            layer_offset_slider.max = 0
 
-        # Set the channel offset to 0 and disable the slider
-        self._display_channel_offset.value = 0
-        channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
-        channel_offset_slider.disabled = True
-        channel_offset_slider.max = 0
+            # Set the channel offset to 0 and disable the slider
+            self._display_channel_offset.value = 0
+            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+            channel_offset_slider.disabled = True
+            channel_offset_slider.max = 0
 
-        # Put the image to the canvas
-        # img_data = (self.bg_hires * 255).astype(np.uint8)  # Scale to [0, 255] and convert to uint8
-        # self.canvas[0].put_image_data(self.bg_display, 0, 0)
-        self.redraw_background()
+            # Redraw the background with the new image
+            self.redraw_background()
 
         # re-trigger image processing in already attached features
         for feature in self.features:
@@ -479,7 +641,6 @@ class App():
 
     def load_image_data(self, img_data):
         if img_data.shape[0:2] != self.image_size:
-            print("Resizing image data to", self.image_size)
             img_data = self.resize_image_data(img_data)
         self.bg_hires = img_data
         self.bg_display = self.convert_image_data_for_display(
@@ -489,31 +650,32 @@ class App():
         
         self._image_is_loaded = True
 
-        # Set layer offset to 0, enable the slider, and set the max value
-        if len(self.bg_hires.shape) == 4 and self.bg_hires.shape[3] > 1:
-            self._display_layer_offset.value = 0
-            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-            layer_offset_slider.disabled = False
-            layer_offset_slider.max = self.bg_hires.shape[-1] - 1
-        else:
-            self._display_layer_offset.value = 0
-            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-            layer_offset_slider.disabled = True
-            layer_offset_slider.max = 0
+        if not self._headless:
+            # Set layer offset to 0, enable the slider, and set the max value
+            if len(self.bg_hires.shape) == 4 and self.bg_hires.shape[3] > 1:
+                self._display_layer_offset.value = 0
+                layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+                layer_offset_slider.disabled = False
+                layer_offset_slider.max = self.bg_hires.shape[-1] - 1
+            else:
+                self._display_layer_offset.value = 0
+                layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+                layer_offset_slider.disabled = True
+                layer_offset_slider.max = 0
 
-        # Set the channel offset to 0, enable the slider, and set the max value
-        if self.bg_hires.shape[2] > 3:
-            self._display_channel_offset.value = 0
-            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
-            channel_offset_slider.disabled = False
-            channel_offset_slider.max = self.bg_hires.shape[2] - 3
-        else:
-            self._display_channel_offset.value = 0
-            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
-            channel_offset_slider.disabled = True
-            channel_offset_slider.max = 0
+            # Set the channel offset to 0, enable the slider, and set the max value
+            if self.bg_hires.shape[2] > 3:
+                self._display_channel_offset.value = 0
+                channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+                channel_offset_slider.disabled = False
+                channel_offset_slider.max = self.bg_hires.shape[2] - 3
+            else:
+                self._display_channel_offset.value = 0
+                channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+                channel_offset_slider.disabled = True
+                channel_offset_slider.max = 0
 
-        self.redraw_background()
+            self.redraw_background()
 
         # re-trigger image processing in already attached features
         for feature in self.features:
@@ -584,6 +746,8 @@ class App():
         
     
     def redraw_background(self):
+        if self._headless:
+            return
         if not self._image_is_loaded:
             return
         self.bg_display = self.convert_image_data_for_display(
@@ -607,14 +771,16 @@ class App():
     def render_timeline_to_array(self, timeline):
         out_buf = self.render_timeline(timeline)
         arr = np.copy(out_buf.data)
-        self.nrt = 0
+        self.nrt = self._nrt_prev
+        AppRegistry().notify_reregister(self)
         return arr
     
 
     def render_timeline_to_file(self, timeline, target_filename):
         out_buf = self.render_timeline(timeline)
         out_buf.save(target_filename)
-        self.nrt = 0
+        self.nrt = self._nrt_prev
+        AppRegistry().notify_reregister(self)
     
 
     def render_timeline(self, timeline):
@@ -629,7 +795,10 @@ class App():
         timeline_frames = self.generate_timeline_frames(timeline, self._render_nframes, self.fps)
         
         # switch on NRT mode
-        self.nrt = 1
+        self._nrt_prev = self._nrt
+        if not self.nrt:
+            self.graph.destroy()
+        self.nrt = True # call setter anyway to notify mappers
 
         # render the timeline
         for frame in range(self._render_nframes):
@@ -638,6 +807,9 @@ class App():
 
         # render NRT audio
         self.graph.render_to_buffer(_output_buffer)
+
+        # destroy the graph
+        self.graph.destroy()
 
         return _output_buffer
 
@@ -668,9 +840,9 @@ class App():
             "probe_y": 0,
         }
         new_timeline = []
-        for time, settings in timeline:
+        for timepoint, settings in timeline:
             new_settings = {**latest_setting, **settings}
-            new_timeline.append((time, new_settings))
+            new_timeline.append((timepoint, new_settings))
             latest_setting = new_settings
         return new_timeline
 
@@ -704,17 +876,13 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
+        # Signal the compute thread to start processing
+        self.compute_event.set()
 
-        # Get probe matrix
-        probe_mat = self.get_probe_matrix()
-
-        # Compute probe features
-        self.compute_features(probe_mat)
-
-        # Update mappings
-        if self.unmuted:
-            self.compute_mappers()
-
+        # Escape in headless mode
+        if self._headless:
+            return
+        
         # Clear the canvas
         self.canvas[1].clear()
 
@@ -732,6 +900,13 @@ class App():
         probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
         probe_y_numbox.value = self.probe_y
 
+        # log probe params and unmuted state
+        self._probe_x_on_last_draw = self._probe_x
+        self._probe_y_on_last_draw = self._probe_y
+        self._probe_width_on_last_draw = self._probe_width
+        self._probe_height_on_last_draw = self._probe_height
+        self._unmuted_on_last_draw = self._unmuted
+
 
     def mouse_callback(self, x, y, pressed: int = 0):
         """Handle mouse, compute probe features, update synth(s), and render kernels."""
@@ -748,8 +923,9 @@ class App():
         self.last_draw_time = current_time  # Update the last event time
 
         with hold_canvas(self.canvas):
-            # Update probe position
-            self.probe_x, self.probe_y = x, y
+            # Update probe position without triggering a draw
+            self._probe_x = self.clamp_probe_x(x)
+            self._probe_y = self.clamp_probe_y(y)
             if pressed == 2:
                 if current_time - self._last_mouse_down_time < 0.2:
                     self.mouse_btn = 2 # Double-click
@@ -759,33 +935,41 @@ class App():
             elif pressed == 3:
                 self.mouse_btn = 0
             # Update probe features, mappers, and render canvas
-            self.draw()
-
-    def key_callback(self, key, shift_key, ctrl_key, meta_key):
-        print("Keyboard event:", key, shift_key, ctrl_key, meta_key)
+            # only draw when any of the probe params or unmuted has changed since the last draw
+            if self._probe_changed or self._unmuted_changed:
+                self.draw()
 
 
     # GUI callbacks
 
     def toggle_dsp(self):
-        audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+        if not self._headless:
+            audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
-            self.graph.start()
-            audio_switch.style.text_color = 'green'
+            try:
+                self.audio_out.play()
+            except sf.NodeAlreadyPlayingException:
+                pass
+            if not self._headless:
+                audio_switch.style.text_color = 'green'
         else:
-            self.graph.stop()
-            audio_switch.style.text_color = 'black'
+            self.audio_out.stop()
+            if not self._headless:
+                audio_switch.style.text_color = 'black'
 
     def toggle_record(self):
-        recording_toggle = find_widget_by_tag(self.ui, "recording_toggle")
+        if not self._headless:
+            recording_toggle = find_widget_by_tag(self.ui, "recording_toggle")
         # Ensure the recording path ends with .wav
         self.recording_path = self.recording_path
         if self.recording:
             self.graph.start_recording(self.recording_path)
-            recording_toggle.style.text_color = 'red'
+            if not self._headless:
+                recording_toggle.style.text_color = 'red'
         else:
             self.graph.stop_recording()
-            recording_toggle.style.text_color = 'black'
+            if not self._headless:
+                recording_toggle.style.text_color = 'black'
 
     def set_master_volume(self):
         self.master_slider_db.set_value(self.master_volume)
