@@ -6,7 +6,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name='pixasonics',
-    version='0.1.4',
+    version='0.1.4.1',
     author='Balint Laczko',
     author_email='balint.laczko@imv.uio.no',
     description='An Image Sonification Toolbox',
@@ -19,6 +19,9 @@ setup(
         'pixasonics': [
             'figures/*', 'images/*', 'pixasonics_tutorial.ipynb'
         ]
+    },
+    exclude_package_data={
+        'pixasonics': ['dev.ipynb']
     },
     entry_points={
         'console_scripts': [
