@@ -1,6 +1,6 @@
 # Pixasonics: An Image Sonification Toolbox for Python
 
-![Status](https://img.shields.io/pypi/status/pixasonics) [![Version](https://img.shields.io/pypi/v/pixasonics)](https://pypi.org/project/pixasonics/) [![Binder](https://2i2c.mybinder.org/badge_logo.svg)](https://2i2c.mybinder.org/v2/gh/balintlaczko/pixasonics/main?urlpath=%2Fdoc%2Ftree%2Fpixasonics_proto.ipynb)
+![Status](https://img.shields.io/pypi/status/pixasonics) [![Version](https://img.shields.io/pypi/v/pixasonics)](https://pypi.org/project/pixasonics/) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/balintlaczko/pixasonics/HEAD?urlpath=%2Fdoc%2Ftree%2Fpixasonics%2Fpixasonics_tutorial.ipynb)
 
 ![A screenshot of the graphical user interface](pixasonics/figures/interface_screenshot.png)
 
