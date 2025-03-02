@@ -9,7 +9,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name='pixasonics',
-    version='0.1.4.2',
+    version='0.1.5',
     author='Balint Laczko',
     author_email='balint.laczko@imv.uio.no',
     description='An Image Sonification Toolbox',
