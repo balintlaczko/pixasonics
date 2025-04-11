@@ -9,7 +9,7 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 import threading
-
+from typing import List, Tuple, Dict
 
 class AppRegistry:
     _instance = None
@@ -30,6 +30,18 @@ class AppRegistry:
         for app in self._apps:
             if app != notifier:
                 app.create_audio_graph()
+
+    def notify_pause(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app._audio_prev = app.audio
+                app.audio = False
+
+    def notify_resume(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app.audio = app._audio_prev
+                app._audio_prev = None
 
 class App():
     def __init__(
@@ -85,6 +97,7 @@ class App():
         self._display_layer_offset = Model(0)
         self._image_is_loaded = False
         self._headless = headless
+        self._draw_lock = False # True disables self.draw()
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -161,7 +174,12 @@ class App():
         changed = value != self._nrt
         self._nrt = value
         if changed:
-            self.create_audio_graph()
+            if value:
+                # when swtiched to NRT, remove our graph from the global graph
+                self.audio = False
+        # enable/disable the Audio button
+        self.toggle_audio_btn(not value)
+        # notify mappers
         for mapper in self.mappers:
             mapper.nrt = value
 
@@ -453,15 +471,11 @@ class App():
     def create_audio_graph(self):
         # Get or create the shared audio graph
         self.graph = sf.AudioGraph.get_shared_graph()
-        if self.graph is not None and self.nrt:
-            self.graph.destroy()
-            self.graph = None
         if self.graph is None:
-            output_device = sf.AudioOut_Dummy(2, buffer_size=self._output_buffer_size) if self.nrt else None
             config = sf.AudioGraphConfig()
             config.output_buffer_size = self._output_buffer_size
-            config.sample_rate = self._sample_rate # will have no effect in NRT mode, signalflow limitation: https://github.com/ideoforms/signalflow/issues/130
-            self.graph = sf.AudioGraph(config=config, start=True, output_device=output_device)
+            config.sample_rate = self._sample_rate
+            self.graph = sf.AudioGraph(config=config, start=True)
 
 
         # Master volume
@@ -489,20 +503,17 @@ class App():
         self.bus = sf.Bus(num_channels=2)
         self.audio_out = self.bus * self.master_volume_smooth * self.master_envelope_bus
 
-        # Check if HW has 2 channels
+        # if HW has 2 channels downmix to mono
         if self.graph.num_output_channels < 2:
             self.audio_out = sf.ChannelMixer(1, self.audio_out)
 
         # Add any registered synths to the bus
+        # TODO: with new synths (based on specs) we'll have to re-instantiate them here on a potentially new graph
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
-        # in NRT mode, unmute the global envelope
-        if self.nrt:
-            self.audio_out.play()
-            self.master_envelope.on()
-
-        # start graph if audio is enabled
+        # put the app's graph to the global graph if audio is enabled
+        # but not in nrt, because in that case we don't want to play the audio
         if self.audio > 0 and not self.nrt:
             self.audio_out.play()
             self.unmuted = self.unmuted # call the setter to update the envelope state
@@ -760,30 +771,76 @@ class App():
         self.canvas[0].put_image_data(self.bg_display, 0, 0)
 
 
-    def get_probe_matrix(self):
-        """Get the probe matrix from the background image."""
+    def get_probe_matrix(self) -> np.ndarray:
+        """
+        Get the probe matrix from the background image.
+        The probe matrix is a square region of the background image.
+        The size of the probe is determined by the probe_width and probe_height properties.
+        The position of the probe is determined by the probe_x and probe_y properties.
+        The probe is clamped to the image size, so that it doesn't go out of bounds.
+
+        Returns:
+            np.ndarray: The probe matrix.
+        """
         x_from = max(self.probe_x - self.probe_width//2, 0)
         y_from = max(self.probe_y - self.probe_height//2, 0)
         probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         return probe
     
 
-    def render_timeline_to_array(self, timeline):
+    def render_timeline_to_array(self, timeline: List[Tuple[float, Dict]]) -> np.ndarray:
+        """
+        Render the timeline to a new buffer and return it as a numpy array.
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+        Returns:
+            np.ndarray: The rendered audio buffer as a numpy array of shape (n_channels, n_samples), where n_channels is always 2 (i.e. stereo).
+        """
         out_buf = self.render_timeline(timeline)
         arr = np.copy(out_buf.data)
-        self.nrt = self._nrt_prev
-        AppRegistry().notify_reregister(self)
         return arr
     
 
-    def render_timeline_to_file(self, timeline, target_filename):
+    def render_timeline_to_file(
+            self, 
+            timeline: List[Tuple[float, Dict]],
+            target_filename: str,
+            ) -> None:
+        """
+        Render the timeline to a file. 
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+        The timeline is rendered to a new buffer and saved to the target filename.
+        The target filename must end with .wav.
+
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+            target_filename (str): The target filename to save the rendered audio to. The filename must end with .wav.
+        """
         out_buf = self.render_timeline(timeline)
         out_buf.save(target_filename)
-        self.nrt = self._nrt_prev
-        AppRegistry().notify_reregister(self)
     
 
-    def render_timeline(self, timeline):
+    def render_timeline(self, timeline: List[Tuple[float, Dict]]) -> sf.Buffer:
+        """
+        Render the timeline to a new buffer.
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+
+        Returns:
+            sf.Buffer: The rendered audio buffer.
+        """
         # create an output buffer to store the rendered audio
         last_time_s, _ = timeline[-1]
         self._output_samps = int(np.ceil(last_time_s * self.graph.sample_rate))
@@ -791,25 +848,76 @@ class App():
         _output_buffer = sf.Buffer(2, self._output_samps)
         _output_buffer.sample_rate = self.graph.sample_rate
 
-        # generate internal timeline buffers for each render frame
+        # step 1: save the before state, stop compute thread, enable draw lock, generate timeline frames, pause other apps
+        # save the before state
+        self._nrt_prev = self._nrt # save current nrt state for later
+        self._audio_prev = self.audio # save current audio state for later
+        self._unmuted_prev = self.unmuted # save current unmuted state for later
+        probe_x_prev = self.probe_x
+        probe_y_prev = self.probe_y
+        probe_width_prev = self.probe_width
+        probe_height_prev = self.probe_height
+        # stop compute thread
+        self.stop_compute_thread()
+        # enable draw lock
+        self._draw_lock = True
+        # generate automation lines
         timeline_frames = self.generate_timeline_frames(timeline, self._render_nframes, self.fps)
-        
-        # switch on NRT mode
-        self._nrt_prev = self._nrt
-        if not self.nrt:
-            self.graph.destroy()
-        self.nrt = True # call setter anyway to notify mappers
+        # stop audio in this app and in other apps
+        self.nrt = False # not yet, we need mappers to set the synths directly
+        self.audio = False
+        AppRegistry().notify_pause(self) # notify other apps to pause their audio
+        self.graph.stop()
+        self.graph.render_to_new_buffer(1) # "sync" the graph
 
-        # render the timeline
+        # step 2: initialize mappings & synths to the first frame 
+        # This is to avoid starting with an interpolation from wherever the Probe was before calling the render.
+        # Also to set the master envelope to 0
+        first_frame_settings = {key: val[0] for key, val in timeline_frames.items()}
+        # apply settings from first frame
+        self.render_frame(None, first_frame_settings) # trigger all mappings based on the Probe matrix of the first frame
+        self.audio = True # put audio on the graph
+        self.graph.render_to_new_buffer(1) # "sync" the graph
+        self.master_envelope.set_input("gate", 0) # stop the env
+        master_envelope_release_time_samps = int(np.ceil(self.master_envelope.release * self.graph.sample_rate))
+        dummy_length_samps = master_envelope_release_time_samps + 1000 # add a bit of padding to the dummy length
+        self.graph.render_to_new_buffer(dummy_length_samps)
+
+        # step 3: trigger the envelope and render everything until the start of the release
+        # switch on NRT mode
+        self.nrt = True # call setter to turn off audio to notify mappers
+        self.graph.render_to_new_buffer(1) # "sync" the graph
+        # render the timeline (record mappings for each frame)
         for frame in range(self._render_nframes):
             frame_settings = {key: val[frame] for key, val in timeline_frames.items()}
             self.render_frame(frame, frame_settings)
+        self.audio = True # put audio on the graph
+        self.master_envelope.set_input("gate", 1) # start the env
+        render_part1_length_samps = self._output_samps - master_envelope_release_time_samps
+        part1_buffer = self.graph.render_to_new_buffer(render_part1_length_samps)
 
-        # render NRT audio
-        self.graph.render_to_buffer(_output_buffer)
+        # step 4: render the release time
+        render_part2_length_samps = master_envelope_release_time_samps
+        self.master_envelope.set_input("gate", 0) # stop the env
+        # render the release time
+        part2_buffer = self.graph.render_to_new_buffer(render_part2_length_samps)
+        # combine the two buffers
+        _output_buffer.data[:, :] = np.concatenate([part1_buffer.data, part2_buffer.data], axis=1)
 
-        # destroy the graph
-        self.graph.destroy()
+        # step 5: restore the before state
+        self.nrt = self._nrt_prev # call setter to set audio btn and notify mappers
+        self.audio = self._audio_prev
+        self.unmuted = self._unmuted_prev
+        # restore the Probe state
+        self.probe_width = probe_width_prev
+        self.probe_height = probe_height_prev
+        self.probe_x = probe_x_prev
+        self.probe_y = probe_y_prev
+        AppRegistry().notify_resume(self) # notify other apps to resume their audio
+        self.graph.start() # start the global graph
+        self._draw_lock = False # disable draw lock
+        self.start_compute_thread() # start the compute thread
+        self.draw() # trigger a draw to update the canvas and update mappings to where they where before the render
 
         return _output_buffer
 
@@ -876,6 +984,10 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
+        if self._draw_lock:
+            return
+        
+        # print("Drawing...")
         # Signal the compute thread to start processing
         self.compute_event.set()
 
@@ -943,19 +1055,38 @@ class App():
     # GUI callbacks
 
     def toggle_dsp(self):
+        # print("Toggling dsp with:", self.audio)
         if not self._headless:
             audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
             try:
+                # print("Trying to play audio")
                 self.audio_out.play()
             except sf.NodeAlreadyPlayingException:
+                # print("Audio node already playing")
                 pass
             if not self._headless:
                 audio_switch.style.text_color = 'green'
         else:
-            self.audio_out.stop()
+            try:
+                # print("Trying to stop audio")
+                self.audio_out.stop()
+            except sf.NodeNotPlayingException:
+                # print("Audio node already stopped")
+                pass
             if not self._headless:
                 audio_switch.style.text_color = 'black'
+
+    def toggle_audio_btn(self, value: bool):
+        if self._headless:
+            return
+        audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+        if value:
+            audio_switch.disabled = False
+            audio_switch.description = 'Audio'
+        else:
+            audio_switch.disabled = True
+            audio_switch.description = 'NRT'
 
     def toggle_record(self):
         if not self._headless:
