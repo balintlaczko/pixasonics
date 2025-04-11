@@ -861,9 +861,13 @@ class Envelope(sf.Patch):
         }
         self.name = name
         self.params["attack"]["default"] = attack
+        self.params["attack"]["value"] = attack
         self.params["decay"]["default"] = decay
+        self.params["decay"]["value"] = decay
         self.params["sustain"]["default"] = sustain
+        self.params["sustain"]["value"] = sustain
         self.params["release"]["default"] = release
+        self.params["release"]["value"] = release
 
         for param in self.params.keys():
             self.params[param]["value"] = self.params[param]["default"]
