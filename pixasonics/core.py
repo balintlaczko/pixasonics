@@ -1055,24 +1055,19 @@ class App():
     # GUI callbacks
 
     def toggle_dsp(self):
-        # print("Toggling dsp with:", self.audio)
         if not self._headless:
             audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if self.audio:
             try:
-                # print("Trying to play audio")
                 self.audio_out.play()
             except sf.NodeAlreadyPlayingException:
-                # print("Audio node already playing")
                 pass
             if not self._headless:
                 audio_switch.style.text_color = 'green'
         else:
             try:
-                # print("Trying to stop audio")
                 self.audio_out.stop()
             except sf.NodeNotPlayingException:
-                # print("Audio node already stopped")
                 pass
             if not self._headless:
                 audio_switch.style.text_color = 'black'
