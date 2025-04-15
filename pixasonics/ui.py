@@ -323,7 +323,7 @@ class SynthCard():
                     raise ValueError(f"SynthCard: Unknown scale '{param['scale']}' for parameter '{param_name}'")
                 param_slider.tag = param_name
                 param_slider.observe(
-                    lambda change: self.synth.set_input_buf(
+                    lambda change: self.synth.set_input(
                         change["owner"].tag, 
                         change["new"],
                         from_slider=True

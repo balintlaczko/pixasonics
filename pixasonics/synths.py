@@ -119,7 +119,7 @@ class Synth():
         # use Mixer to mix down to stereo if panning is requested
         self.output = Mixer(self.patch_output, self.params["panning"]["smoothed"] * 0.5 + 0.5, out_channels=2) if self.add_panning else self.patch_output
 
-    def set_input_buf(self, name, value, from_slider=False):
+    def set_input(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
         self.params[name]["value"] = value.tolist() if isinstance(value, np.ndarray) else value
         if not from_slider and self.num_channels == 1:
@@ -135,7 +135,7 @@ class Synth():
         slider.unobserve_all()
         slider.value = value
         slider.observe(
-            lambda change: self.set_input_buf(
+            lambda change: self.set_input(
                     change["owner"].tag, 
                     change["new"],
                     from_slider=True
@@ -144,7 +144,7 @@ class Synth():
 
     def reset_to_default(self):
         for param in self.params:
-            self.set_input_buf(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
+            self.set_input(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
 
     def __getitem__(self, key):
         return self.params[key]

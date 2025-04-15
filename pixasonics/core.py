@@ -1280,7 +1280,7 @@ class Mapper():
             scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
 
         if not self.nrt:
-            self.obj_out_owner.set_input_buf(
+            self.obj_out_owner.set_input(
                 self.obj_out["param_name"],
                 scaled_val,
                 from_slider=False
