@@ -1,101 +1,127 @@
 import numpy as np
 import signalflow as sf
-from .utils import broadcast_params, array2str, ParamSliderDebouncer
+import json
+from .utils import broadcast_params, array2str, find_dict_with_entry, ParamSliderDebouncer
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
+from typing import Dict, List
+import copy
 
 PARAM_SLIDER_DEBOUNCE_TIME = 0.05
 
-class Synth(sf.Patch):
-    def __init__(self):
-        super().__init__()
-
-
-class Theremin(Synth):
-    def __init__(self, frequency=440, amplitude=0.5, panning=0, name="Theremin"):
-        super().__init__()
+class Synth():
+    def __init__(
+            self, 
+            patch_spec: sf.PatchSpec, 
+            params_dict: Dict = None, 
+            name: str = "Synth",
+            add_amplitude: bool = True,
+            add_panning: bool = True):
         self.name = name
-        self.params = {
-            "frequency": {
-                "min": 60,
-                "max": 4000,
-                "default": 440,
-                "unit": "Hz",
-                "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Frequency",
-                "param_name": "frequency",
-                "owner": self
-            },
-            "amplitude": {
+        self.patch_spec = patch_spec
+        self.params = {} if params_dict is None else copy.deepcopy(params_dict)
+        self.synth = None
+        self.num_channels = -1 # will be set in generate_params
+        self.add_amplitude = add_amplitude
+        self.add_panning = add_panning
+        self.id = str(id(self))
+        # generate params dict
+        self.generate_params()
+        # create param buffers, their players, smoothing, and the patch
+        self.create_audio_graph()
+        # create ui
+        self.create_ui()
+        # create param slider debouncer if necessary
+        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+
+    def generate_params(self):
+        # check that there are keys for all params
+        params = get_spec_inputs_dict(self.patch_spec)
+        # add amplitude if requested
+        if self.add_amplitude:
+            # amplitude should default to 0.5
+            params["amplitude"] = 0.5
+            self.params["amplitude"] = {
                 "min": 0,
                 "max": 1,
-                "default": 0.5,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Amplitude",
-                "param_name": "amplitude",
-                "owner": self
-            },
-            "panning": {
+            }
+        # add panning if requested
+        if self.add_panning:
+            # panning should default to middle if single channel or a spread if multichannel
+            spec_output_channels = get_patch_spec_num_output_channels(self.patch_spec)
+            if spec_output_channels == 1:
+                panning_default = 0
+            else:
+                panning_default = [-1, 1]
+            params["panning"] = panning_default
+            self.params["panning"] = {
                 "min": -1,
                 "max": 1,
-                "default": 0,
+            }
+        # parse & sanitize param dicts
+        for param_name in params.keys():
+            # if not, then make a new dict for it
+            if param_name not in self.params:
+                self.params[param_name] = {}
+            # if yes, then assert that it is a dict
+            assert isinstance(self.params[param_name], dict)
+            # fill in the dict with the values
+            template = {
+                "min": 0,
+                "max": 1,
                 "unit": "",
                 "scale": "linear",
+            }
+            forced_template = {
                 "buffer": None,
                 "buffer_player": None,
-                "name": f"{self.name} Panning",
-                "param_name": "panning",
-                "owner": self
+                "name": f"{self.name} {param_name.capitalize()}",
+                "param_name": param_name,
+                "owner": self,
             }
-        }
-        self.frequency, self.amplitude, self.panning = broadcast_params(frequency, amplitude, panning)
-        self.num_channels = len(self.frequency) # at this point all lengths are the same
-
-        self.frequency_buffer = sf.Buffer(self.num_channels, 1)
-        self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
-        self.panning_buffer = sf.Buffer(self.num_channels, 1)
-        
-        self.frequency_buffer.data[:, :] = np.array(self.frequency).reshape(self.num_channels, 1)
-        self.params["frequency"]["buffer"] = self.frequency_buffer
-        self.params["frequency"]["default"] = self.frequency
-        
-        self.amplitude_buffer.data[:, :] = np.array(self.amplitude).reshape(self.num_channels, 1)
-        self.params["amplitude"]["buffer"] = self.amplitude_buffer
-        self.params["amplitude"]["default"] = self.amplitude
-
-        self.panning_buffer.data[:, :] = np.array(self.panning).reshape(self.num_channels, 1)
-        self.params["panning"]["buffer"] = self.panning_buffer
-        self.params["panning"]["default"] = self.panning
-        
-        self.frequency_value = sf.BufferPlayer(self.frequency_buffer, loop=True)
-        self.params["frequency"]["buffer_player"] = self.frequency_value
-        self.amplitude_value = sf.BufferPlayer(self.amplitude_buffer, loop=True)
-        self.params["amplitude"]["buffer_player"] = self.amplitude_value
-        self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
-        self.params["panning"]["buffer_player"] = self.panning_value
-        
+            # combine template with user-provided values
+            self.params[param_name] = {**template, **self.params[param_name]} # user can overwrite the template
+            # combine forced_template with user-provided values
+            self.params[param_name] = {**self.params[param_name], **forced_template} # user cannot overwrite the forced_template
+        # broadcast params
+        param_names = list(params.keys())
+        param_values = [params[param_name] for param_name in param_names]
+        broadcasted_params = broadcast_params(*param_values)
+        self.num_channels = len(broadcasted_params[0]) # all params should have the same amount of channels now
+        # register values in params dict
+        for i, param_name in enumerate(param_names):
+            params_list = broadcasted_params[i]
+            self.params[param_name]["default"] = params_list
+            self.params[param_name]["value"] = params_list
+    
+    def create_audio_graph(self):
         graph = sf.AudioGraph.get_shared_graph()
         mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
-        freq_smooth = sf.Smooth(self.frequency_value, mix_val)
-        amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
-        panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
-        
-        sine = sf.SineOscillator(freq_smooth)
-        output = Mixer(sine * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
-        
-        self.set_output(output)
-
-        self.id = str(id(self))
-        self.create_ui()
-
-        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+        self.patch = sf.Patch(self.patch_spec)
+        # generate param buffers & players & smoothers for each param
+        param_names = list(self.params.keys())
+        for param_name in param_names:
+            params_list = self.params[param_name]["value"] # expecting the broadcasted values
+            buffer = sf.Buffer(self.num_channels, 1)
+            buffer.data[:, :] = np.array(params_list).reshape(self.num_channels, 1)
+            self.params[param_name]["buffer"] = buffer
+            buffer_player = sf.BufferPlayer(buffer, loop=True)
+            self.params[param_name]["buffer_player"] = buffer_player
+            smoothed = sf.Smooth(buffer_player, mix_val)
+            self.params[param_name]["smoothed"] = smoothed
+            # set the input of the patch to the smoothed value, except the added amplitude and panning params
+            if self.add_amplitude and param_name == "amplitude":
+                continue
+            if self.add_panning and param_name == "panning":
+                continue
+            self.patch.set_input(param_name, smoothed)
+        # multiply patch output with amplitude if requested
+        self.patch_output = self.patch.output * self.params["amplitude"]["smoothed"] if self.add_amplitude else self.patch.output
+        # use Mixer to mix down to stereo if panning is requested
+        self.output = Mixer(self.patch_output, self.params["panning"]["smoothed"] * 0.5 + 0.5, out_channels=2) if self.add_panning else self.patch_output
 
     def set_input_buf(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
+        self.params[name]["value"] = value.tolist() if isinstance(value, np.ndarray) else value
         if not from_slider and self.num_channels == 1:
             slider = find_widget_by_tag(self.ui, name)
             slider.unobserve_all()
@@ -115,7 +141,6 @@ class Theremin(Synth):
                     from_slider=True
                 ), 
                 names="value")
-        
 
     def reset_to_default(self):
         for param in self.params:
@@ -136,243 +161,180 @@ class Theremin(Synth):
     @property
     def ui(self):
         return self._ui()
-    
+
+    def __repr__(self):
+        return f"Synth {self.id}: {self.name}"
+
+
+class ThereminPatch(sf.Patch):
+    def __init__(self, frequency=440):
+        super().__init__()
+        frequency = self.add_input("frequency", frequency)
+        out = sf.SineOscillator(frequency)
+        self.set_output(out)
+
+
+class Theremin(Synth):
+    def __init__(self, frequency=440, name="Theremin"):
+        # create the patch spec
+        _spec = ThereminPatch(
+            frequency=frequency, 
+        ).to_spec()
+        # create the params dict
+        _params = {
+            "frequency": {
+                "min": 20,
+                "max": 20000,
+                "unit": "Hz",
+                "scale": "log",
+            },
+        }
+        # call the parent constructor
+        super().__init__(_spec, params_dict=_params, name=name)
+        
     def __repr__(self):
         return f"Theremin {self.id}: {self.name}"
-    
 
-class Oscillator(Synth):
+
+class OscillatorPatch(sf.Patch):
     def __init__(
             self, 
             frequency=440, 
-            amplitude=0.5, 
-            panning=0, 
             lp_cutoff=20000,
             lp_resonance=0.5,
             hp_cutoff=20,
             hp_resonance=0.5,
             waveform="sine",
-            name="Oscillator"):
+            ):
         super().__init__()
-
         wf_types = ["sine", "square", "saw", "triangle"]
         assert waveform in wf_types, f"Waveform must be one of {wf_types}"
-        self.waveform = waveform
+        frequency = self.add_input("frequency", frequency)
+        lp_cutoff = self.add_input("lp_cutoff", lp_cutoff)
+        lp_resonance = self.add_input("lp_resonance", lp_resonance)
+        hp_cutoff = self.add_input("hp_cutoff", hp_cutoff)
+        hp_resonance = self.add_input("hp_resonance", hp_resonance)
+        # create the synth
+        osc_templates = [sf.SineOscillator, sf.SquareOscillator, sf.SawOscillator, sf.TriangleOscillator]
+        osc = osc_templates[wf_types.index(waveform)](frequency)
+        # create the filters
+        lp_resonance_clipped = sf.Clip(lp_resonance, 0.0, 0.999)
+        hp_resonance_clipped = sf.Clip(hp_resonance, 0.0, 0.999)
+        lp = sf.SVFilter(
+            osc,
+            filter_type="low_pass",
+            cutoff=lp_cutoff,
+            resonance=lp_resonance_clipped
+        )
+        hp = sf.SVFilter(
+            lp,
+            filter_type="high_pass",
+            cutoff=hp_cutoff,
+            resonance=hp_resonance_clipped
+        )
+        out = hp
+        self.set_output(out)
 
-        self.name = name
 
-        self.params = {
+class Oscillator(Synth):
+    def __init__(
+        self,
+        frequency=440, 
+        lp_cutoff=20000,
+        lp_resonance=0.5,
+        hp_cutoff=20,
+        hp_resonance=0.5,
+        waveform="sine",
+        name="Oscillator",
+        ):
+        # create the patch spec
+        _spec = OscillatorPatch(
+            frequency=frequency, 
+            lp_cutoff=lp_cutoff,
+            lp_resonance=lp_resonance,
+            hp_cutoff=hp_cutoff,
+            hp_resonance=hp_resonance,
+            waveform=waveform
+        ).to_spec()
+        # create the params dict
+        _params = {
             "frequency": {
-                "min": 60,
-                "max": 4000,
-                "default": 440,
+                "min": 20,
+                "max": 20000,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Frequency",
-                "param_name": "frequency",
-                "owner": self
-            },
-            "amplitude": {
-                "min": 0,
-                "max": 1,
-                "default": 0.5,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Amplitude",
-                "param_name": "amplitude",
-                "owner": self
-            },
-            "panning": {
-                "min": -1,
-                "max": 1,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Panning",
-                "param_name": "panning",
-                "owner": self
             },
             "lp_cutoff": {
                 "min": 20,
                 "max": 20000,
-                "default": 20000,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} LP Cutoff",
-                "param_name": "lp_cutoff",
-                "owner": self
             },
             "lp_resonance": {
                 "min": 0,
                 "max": 0.999,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} LP Resonance",
-                "param_name": "lp_resonance",
-                "owner": self
             },
             "hp_cutoff": {
                 "min": 20,
                 "max": 20000,
-                "default": 20,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} HP Cutoff",
-                "param_name": "hp_cutoff",
-                "owner": self
             },
             "hp_resonance": {
                 "min": 0,
                 "max": 0.999,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} HP Resonance",
-                "param_name": "hp_resonance",
-                "owner": self
             },
         }
-        self.frequency, self.amplitude, self.panning, self.lp_cutoff, self.lp_resonance, self.hp_cutoff, self.hp_resonance = broadcast_params(frequency, amplitude, panning, lp_cutoff, lp_resonance, hp_cutoff, hp_resonance)
-        self.num_channels = len(self.frequency) # at this point all lengths are the same
+        # call the parent constructor
+        super().__init__(_spec, params_dict=_params, name=name)
 
-        self.frequency_buffer = sf.Buffer(self.num_channels, 1)
-        self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
-        self.panning_buffer = sf.Buffer(self.num_channels, 1)
-        self.lp_cutoff_buffer = sf.Buffer(self.num_channels, 1)
-        self.lp_resonance_buffer = sf.Buffer(self.num_channels, 1)
-        self.hp_cutoff_buffer = sf.Buffer(self.num_channels, 1)
-        self.hp_resonance_buffer = sf.Buffer(self.num_channels, 1)
-        
-        self.frequency_buffer.data[:, :] = np.array(self.frequency).reshape(self.num_channels, 1)
-        self.params["frequency"]["buffer"] = self.frequency_buffer
-        self.params["frequency"]["default"] = self.frequency
-        
-        self.amplitude_buffer.data[:, :] = np.array(self.amplitude).reshape(self.num_channels, 1)
-        self.params["amplitude"]["buffer"] = self.amplitude_buffer
-        self.params["amplitude"]["default"] = self.amplitude
-
-        self.panning_buffer.data[:, :] = np.array(self.panning).reshape(self.num_channels, 1)
-        self.params["panning"]["buffer"] = self.panning_buffer
-        self.params["panning"]["default"] = self.panning
-
-        self.lp_cutoff_buffer.data[:, :] = np.array(self.lp_cutoff).reshape(self.num_channels, 1)
-        self.params["lp_cutoff"]["buffer"] = self.lp_cutoff_buffer
-        self.params["lp_cutoff"]["default"] = self.lp_cutoff
-
-        self.lp_resonance_buffer.data[:, :] = np.array(self.lp_resonance).reshape(self.num_channels, 1)
-        self.params["lp_resonance"]["buffer"] = self.lp_resonance_buffer
-        self.params["lp_resonance"]["default"] = self.lp_resonance
-
-        self.hp_cutoff_buffer.data[:, :] = np.array(self.hp_cutoff).reshape(self.num_channels, 1)
-        self.params["hp_cutoff"]["buffer"] = self.hp_cutoff_buffer
-        self.params["hp_cutoff"]["default"] = self.hp_cutoff
-
-        self.hp_resonance_buffer.data[:, :] = np.array(self.hp_resonance).reshape(self.num_channels, 1)
-        self.params["hp_resonance"]["buffer"] = self.hp_resonance_buffer
-        self.params["hp_resonance"]["default"] = self.hp_resonance
-        
-        self.frequency_value = sf.BufferPlayer(self.frequency_buffer, loop=True)
-        self.params["frequency"]["buffer_player"] = self.frequency_value
-        self.amplitude_value = sf.BufferPlayer(self.amplitude_buffer, loop=True)
-        self.params["amplitude"]["buffer_player"] = self.amplitude_value
-        self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
-        self.params["panning"]["buffer_player"] = self.panning_value
-        self.lp_cutoff_value = sf.BufferPlayer(self.lp_cutoff_buffer, loop=True)
-        self.params["lp_cutoff"]["buffer_player"] = self.lp_cutoff_value
-        self.lp_resonance_value = sf.BufferPlayer(self.lp_resonance_buffer, loop=True)
-        self.params["lp_resonance"]["buffer_player"] = self.lp_resonance_value
-        self.hp_cutoff_value = sf.BufferPlayer(self.hp_cutoff_buffer, loop=True)
-        self.params["hp_cutoff"]["buffer_player"] = self.hp_cutoff_value
-        self.hp_resonance_value = sf.BufferPlayer(self.hp_resonance_buffer, loop=True)
-        self.params["hp_resonance"]["buffer_player"] = self.hp_resonance_value
-
-        # Clip the resonance values to avoid filter instability
-        self.lp_resonance_value_clip = sf.Clip(self.lp_resonance_value, 0, 0.999)
-        self.hp_resonance_value_clip = sf.Clip(self.hp_resonance_value, 0, 0.999)
-        
-        graph = sf.AudioGraph.get_shared_graph()
-        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
-        freq_smooth = sf.Smooth(self.frequency_value, mix_val)
-        amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
-        panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
-        lp_cutoff_smooth = sf.Smooth(self.lp_cutoff_value, mix_val)
-        lp_resonance_smooth = sf.Smooth(self.lp_resonance_value_clip, mix_val)
-        hp_cutoff_smooth = sf.Smooth(self.hp_cutoff_value, mix_val)
-        hp_resonance_smooth = sf.Smooth(self.hp_resonance_value_clip, mix_val)
-        
-        osc_templates = [sf.SineOscillator, sf.SquareOscillator, sf.SawOscillator, sf.TriangleOscillator]
-        osc = osc_templates[wf_types.index(self.waveform)](freq_smooth)
-        lp = sf.SVFilter(osc, filter_type="low_pass", cutoff=lp_cutoff_smooth, resonance=lp_resonance_smooth)
-        hp = sf.SVFilter(lp, filter_type="high_pass", cutoff=hp_cutoff_smooth, resonance=hp_resonance_smooth)
-        output = Mixer(hp * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
-        
-        self.set_output(output)
-
-        self.id = str(id(self))
-        self.create_ui()
-
-        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
-
-    def set_input_buf(self, name, value, from_slider=False):
-        self.params[name]["buffer"].data[:, :] = value
-        if not from_slider and self.num_channels == 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.unobserve_all()
-            slider_value = value if self.num_channels == 1 else array2str(value)
-            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
-        elif not from_slider and self.num_channels > 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.value = array2str(value)
-    
-    def update_slider(self, slider, value):
-        slider.unobserve_all()
-        slider.value = value
-        slider.observe(
-            lambda change: self.set_input_buf(
-                    change["owner"].tag, 
-                    change["new"],
-                    from_slider=True
-                ), 
-                names="value")
-
-    def reset_to_default(self):
-        for param in self.params:
-            self.set_input_buf(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
-
-    def __getitem__(self, key):
-        return self.params[key]
-    
-    def create_ui(self):
-        self._ui = SynthCard(
-            name=self.name,
-            id=self.id,
-            params=self.params,
-            num_channels=self.num_channels
-        )
-        self._ui.synth = self
-
-    @property
-    def ui(self):
-        return self._ui()
-    
     def __repr__(self):
         return f"Oscillator {self.id}: {self.name}"
-    
+
+
+class FilteredNoisePatch(sf.Patch):
+    def __init__(
+            self,
+            filter_type="band_pass", # can be 'low_pass', 'band_pass', 'high_pass', 'notch', 'peak', 'low_shelf', 'high_shelf'
+            order=3,
+            cutoff=440,
+            resonance=0.5,
+            ):
+        super().__init__()
+        filter_types = ["low_pass", "band_pass", "high_pass", "notch", "peak", "low_shelf", "high_shelf"]
+        assert filter_type in filter_types, f"Filter type must be one of {filter_types}"
+        self.filter_type = filter_type
+        self.order = np.clip(order, 1, 8)
+        cutoff = self.add_input("cutoff", cutoff)
+        resonance = self.add_input("resonance", resonance)
+        resonance_clipped = sf.Clip(resonance, 0.0, 0.999)
+        graph = sf.AudioGraph.get_shared_graph()
+        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
+        # create the synth
+        noise = sf.WhiteNoise()
+        # first one
+        filters = sf.SVFilter(
+            noise,
+            filter_type=self.filter_type,
+            cutoff=cutoff,
+            resonance=resonance_clipped
+        )
+        # the rest
+        for i in range(1, self.order):
+            filters = sf.SVFilter(
+                filters,
+                filter_type=self.filter_type,
+                cutoff=cutoff,
+                resonance=resonance_clipped
+            )
+        # amplitude compensation
+        filters_rms = sf.RMS(filters)
+        filters_rms_smooth = sf.Smooth(filters_rms, mix_val)
+        filters = filters / filters_rms_smooth
+        # output
+        out = filters
+        self.set_output(out * 0.707 * 0.5)
+
 
 class FilteredNoise(Synth):
     def __init__(
@@ -381,449 +343,142 @@ class FilteredNoise(Synth):
             order=3,
             cutoff=440,
             resonance=0.5,
-            amplitude=0.5,
-            panning=0,
-            name="FilteredNoise"):
-        super().__init__()
-
-        filter_types = ["low_pass", "band_pass", "high_pass", "notch", "peak", "low_shelf", "high_shelf"]
-        assert filter_type in filter_types, f"Filter type must be one of {filter_types}"
-        self.filter_type = filter_type
-        self.order = np.clip(order, 1, 8)
-
-        self.name = name
-
-        self.params = {
+            name="FilteredNoise",
+            ):
+        # create the patch spec
+        _spec = FilteredNoisePatch(
+            filter_type=filter_type,
+            order=order,
+            cutoff=cutoff,
+            resonance=resonance,
+        ).to_spec()
+        # create the params dict
+        _params = {
             "cutoff": {
                 "min": 20,
                 "max": 20000,
-                "default": 440,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Cutoff",
-                "param_name": "cutoff",
-                "owner": self
             },
             "resonance": {
                 "min": 0,
                 "max": 0.999,
-                "default": 0.5,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Resonance",
-                "param_name": "resonance",
-                "owner": self
-            },
-            "amplitude": {
-                "min": 0,
-                "max": 1,
-                "default": 0.5,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Amplitude",
-                "param_name": "amplitude",
-                "owner": self
-            },
-            "panning": {
-                "min": -1,
-                "max": 1,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Panning",
-                "param_name": "panning",
-                "owner": self
             },
         }
-        self.cutoff, self.resonance, self.amplitude, self.panning = broadcast_params(cutoff, resonance, amplitude, panning)
-        self.num_channels = len(self.cutoff) # at this point all lengths are the same
+        # call the parent constructor
+        super().__init__(_spec, params_dict=_params, name=name)
 
-        self.cutoff_buffer = sf.Buffer(self.num_channels, 1)
-        self.resonance_buffer = sf.Buffer(self.num_channels, 1)
-        self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
-        self.panning_buffer = sf.Buffer(self.num_channels, 1)
-        
-        self.cutoff_buffer.data[:, :] = np.array(self.cutoff).reshape(self.num_channels, 1)
-        self.params["cutoff"]["buffer"] = self.cutoff_buffer
-        self.params["cutoff"]["default"] = self.cutoff
-
-        self.resonance_buffer.data[:, :] = np.array(self.resonance).reshape(self.num_channels, 1)
-        self.params["resonance"]["buffer"] = self.resonance_buffer
-        self.params["resonance"]["default"] = self.resonance
-        
-        self.amplitude_buffer.data[:, :] = np.array(self.amplitude).reshape(self.num_channels, 1)
-        self.params["amplitude"]["buffer"] = self.amplitude_buffer
-        self.params["amplitude"]["default"] = self.amplitude
-
-        self.panning_buffer.data[:, :] = np.array(self.panning).reshape(self.num_channels, 1)
-        self.params["panning"]["buffer"] = self.panning_buffer
-        self.params["panning"]["default"] = self.panning
-        
-        self.cutoff_value = sf.BufferPlayer(self.cutoff_buffer, loop=True)
-        self.params["cutoff"]["buffer_player"] = self.cutoff_value
-        self.resonance_value = sf.BufferPlayer(self.resonance_buffer, loop=True)
-        self.params["resonance"]["buffer_player"] = self.resonance_value
-        self.amplitude_value = sf.BufferPlayer(self.amplitude_buffer, loop=True)
-        self.params["amplitude"]["buffer_player"] = self.amplitude_value
-        self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
-        self.params["panning"]["buffer_player"] = self.panning_value
-
-        # Clip the resonance value to avoid filter instability
-        self.resonance_value_clip = sf.Clip(self.resonance_value, 0, 0.999)
-        
-        graph = sf.AudioGraph.get_shared_graph()
-        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
-        cutoff_smooth = sf.Smooth(self.cutoff_value, mix_val)
-        resonance_smooth = sf.Smooth(self.resonance_value_clip, mix_val)
-        amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
-        panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
-
-        noise = sf.WhiteNoise()
-
-        # First one
-        filters = sf.SVFilter(noise, filter_type=self.filter_type, cutoff=cutoff_smooth, resonance=resonance_smooth)
-        # The rest
-        for i in range(1, self.order):
-            filters = sf.SVFilter(filters, filter_type=self.filter_type, cutoff=cutoff_smooth, resonance=resonance_smooth)
-        
-        # amplitude compensation
-        filters_rms = sf.RMS(filters)
-        filters_rms_smooth = sf.Smooth(filters_rms, mix_val)
-        filters = filters / filters_rms_smooth
-        
-        out = Mixer(filters * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
-        
-        self.set_output(out * 0.707 * 0.5)
-
-        self.id = str(id(self))
-        self.create_ui()
-
-        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
-
-    def set_input_buf(self, name, value, from_slider=False):
-        self.params[name]["buffer"].data[:, :] = value
-        if not from_slider and self.num_channels == 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.unobserve_all()
-            slider_value = value if self.num_channels == 1 else array2str(value)
-            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
-        elif not from_slider and self.num_channels > 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.value = array2str(value)
-    
-    def update_slider(self, slider, value):
-        slider.unobserve_all()
-        slider.value = value
-        slider.observe(
-            lambda change: self.set_input_buf(
-                    change["owner"].tag, 
-                    change["new"],
-                    from_slider=True
-                ), 
-                names="value")
-
-    def reset_to_default(self):
-        for param in self.params:
-            self.set_input_buf(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
-
-    def __getitem__(self, key):
-        return self.params[key]
-    
-    def create_ui(self):
-        self._ui = SynthCard(
-            name=self.name,
-            id=self.id,
-            params=self.params,
-            num_channels=self.num_channels
-        )
-        self._ui.synth = self
-
-    @property
-    def ui(self):
-        return self._ui()
-    
     def __repr__(self):
         return f"FilteredNoise {self.id}: {self.name}"
-    
 
-class SimpleFM(Synth):
+
+class SimpleFMPatch(sf.Patch):
     def __init__(
             self, 
-            carrier_frequency=440,
+            carrier_frequency=440, 
             harmonicity_ratio=1,
-            modulation_index=1, 
-            amplitude=0.5, 
-            panning=0, 
+            modulation_index=1,
             lp_cutoff=20000,
             lp_resonance=0.5,
             hp_cutoff=20,
             hp_resonance=0.5,
-            name="SimpleFM"):
+            ):
         super().__init__()
+        carrier_freq = self.add_input("carrier_freq", carrier_frequency)
+        harm_ratio = self.add_input("harm_ratio", harmonicity_ratio)
+        mod_index = self.add_input("mod_index", modulation_index)
+        lp_cutoff = self.add_input("lp_cutoff", lp_cutoff)
+        lp_resonance = self.add_input("lp_resonance", lp_resonance)
+        hp_cutoff = self.add_input("hp_cutoff", hp_cutoff)
+        hp_resonance = self.add_input("hp_resonance", hp_resonance)
+        # create the synth
+        mod_freq = carrier_freq * harm_ratio
+        mod_amp = mod_freq * mod_index
+        modulator = sf.SineOscillator(mod_freq) * mod_amp
+        carrier = sf.SineOscillator(carrier_freq + modulator)
+        # create the filters
+        lp_resonance_clipped = sf.Clip(lp_resonance, 0.0, 0.999)
+        hp_resonance_clipped = sf.Clip(hp_resonance, 0.0, 0.999)
+        lp = sf.SVFilter(
+            carrier,
+            filter_type="low_pass",
+            cutoff=lp_cutoff,
+            resonance=lp_resonance_clipped
+        )
+        hp = sf.SVFilter(
+            lp,
+            filter_type="high_pass",
+            cutoff=hp_cutoff,
+            resonance=hp_resonance_clipped
+        )
+        out = hp
+        self.set_output(out)
 
-        self.name = name
 
-        self.params = {
+class SimpleFM(Synth):
+    def __init__(
+        self,
+        carrier_frequency=440, 
+        harmonicity_ratio=1,
+        modulation_index=1,
+        lp_cutoff=20000,
+        lp_resonance=0.5,
+        hp_cutoff=20,
+        hp_resonance=0.5,
+        name="SimpleFM",
+    ):
+        # create the patch spec
+        _spec = SimpleFMPatch(
+            carrier_frequency=carrier_frequency, 
+            harmonicity_ratio=harmonicity_ratio,
+            modulation_index=modulation_index,
+            lp_cutoff=lp_cutoff,
+            lp_resonance=lp_resonance,
+            hp_cutoff=hp_cutoff,
+            hp_resonance=hp_resonance
+        ).to_spec()
+        # create the params dict
+        _params = {
             "carrier_freq": {
                 "min": 20,
-                "max": 8000,
-                "default": 440,
+                "max": 20000,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Carrier Frequency",
-                "param_name": "carrier_freq",
-                "owner": self
             },
             "harm_ratio": {
                 "min": 0,
                 "max": 10,
-                "default": 1,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Harmonicity Ratio",
-                "param_name": "harm_ratio",
-                "owner": self
             },
             "mod_index": {
                 "min": 0,
                 "max": 10,
-                "default": 1,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Modulation Index",
-                "param_name": "mod_index",
-                "owner": self
-            },
-            "amplitude": {
-                "min": 0,
-                "max": 1,
-                "default": 0.5,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Amplitude",
-                "param_name": "amplitude",
-                "owner": self
-            },
-            "panning": {
-                "min": -1,
-                "max": 1,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} Panning",
-                "param_name": "panning",
-                "owner": self
             },
             "lp_cutoff": {
                 "min": 20,
                 "max": 20000,
-                "default": 20000,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} LP Cutoff",
-                "param_name": "lp_cutoff",
-                "owner": self
             },
             "lp_resonance": {
                 "min": 0,
                 "max": 0.999,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} LP Resonance",
-                "param_name": "lp_resonance",
-                "owner": self
             },
             "hp_cutoff": {
                 "min": 20,
                 "max": 20000,
-                "default": 20,
                 "unit": "Hz",
                 "scale": "log",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} HP Cutoff",
-                "param_name": "hp_cutoff",
-                "owner": self
             },
             "hp_resonance": {
                 "min": 0,
                 "max": 0.999,
-                "default": 0,
-                "unit": "",
-                "scale": "linear",
-                "buffer": None,
-                "buffer_player": None,
-                "name": f"{self.name} HP Resonance",
-                "param_name": "hp_resonance",
-                "owner": self
             },
         }
-        self.carrier_freq, self.harm_ratio, self.mod_index, self.amplitude, self.panning, self.lp_cutoff, self.lp_resonance, self.hp_cutoff, self.hp_resonance = broadcast_params(carrier_frequency, harmonicity_ratio, modulation_index, amplitude, panning, lp_cutoff, lp_resonance, hp_cutoff, hp_resonance)
-        self.num_channels = len(self.carrier_freq) # at this point all lengths are the same
-
-        self.carrier_freq_buffer = sf.Buffer(self.num_channels, 1)
-        self.harm_ratio_buffer = sf.Buffer(self.num_channels, 1)
-        self.mod_index_buffer = sf.Buffer(self.num_channels, 1)
-        self.amplitude_buffer = sf.Buffer(self.num_channels, 1)
-        self.panning_buffer = sf.Buffer(self.num_channels, 1)
-        self.lp_cutoff_buffer = sf.Buffer(self.num_channels, 1)
-        self.lp_resonance_buffer = sf.Buffer(self.num_channels, 1)
-        self.hp_cutoff_buffer = sf.Buffer(self.num_channels, 1)
-        self.hp_resonance_buffer = sf.Buffer(self.num_channels, 1)
-        
-        self.carrier_freq_buffer.data[:, :] = np.array(self.carrier_freq).reshape(self.num_channels, 1)
-        self.params["carrier_freq"]["buffer"] = self.carrier_freq_buffer
-        self.params["carrier_freq"]["default"] = self.carrier_freq
-
-        self.harm_ratio_buffer.data[:, :] = np.array(self.harm_ratio).reshape(self.num_channels, 1)
-        self.params["harm_ratio"]["buffer"] = self.harm_ratio_buffer
-        self.params["harm_ratio"]["default"] = self.harm_ratio
-
-        self.mod_index_buffer.data[:, :] = np.array(self.mod_index).reshape(self.num_channels, 1)
-        self.params["mod_index"]["buffer"] = self.mod_index_buffer
-        self.params["mod_index"]["default"] = self.mod_index
-        
-        self.amplitude_buffer.data[:, :] = np.array(self.amplitude).reshape(self.num_channels, 1)
-        self.params["amplitude"]["buffer"] = self.amplitude_buffer
-        self.params["amplitude"]["default"] = self.amplitude
-
-        self.panning_buffer.data[:, :] = np.array(self.panning).reshape(self.num_channels, 1)
-        self.params["panning"]["buffer"] = self.panning_buffer
-        self.params["panning"]["default"] = self.panning
-
-        self.lp_cutoff_buffer.data[:, :] = np.array(self.lp_cutoff).reshape(self.num_channels, 1)
-        self.params["lp_cutoff"]["buffer"] = self.lp_cutoff_buffer
-        self.params["lp_cutoff"]["default"] = self.lp_cutoff
-
-        self.lp_resonance_buffer.data[:, :] = np.array(self.lp_resonance).reshape(self.num_channels, 1)
-        self.params["lp_resonance"]["buffer"] = self.lp_resonance_buffer
-        self.params["lp_resonance"]["default"] = self.lp_resonance
-
-        self.hp_cutoff_buffer.data[:, :] = np.array(self.hp_cutoff).reshape(self.num_channels, 1)
-        self.params["hp_cutoff"]["buffer"] = self.hp_cutoff_buffer
-        self.params["hp_cutoff"]["default"] = self.hp_cutoff
-
-        self.hp_resonance_buffer.data[:, :] = np.array(self.hp_resonance).reshape(self.num_channels, 1)
-        self.params["hp_resonance"]["buffer"] = self.hp_resonance_buffer
-        self.params["hp_resonance"]["default"] = self.hp_resonance
-        
-        self.carrier_freq_value = sf.BufferPlayer(self.carrier_freq_buffer, loop=True)
-        self.params["carrier_freq"]["buffer_player"] = self.carrier_freq_value
-        self.harm_ratio_value = sf.BufferPlayer(self.harm_ratio_buffer, loop=True)
-        self.params["harm_ratio"]["buffer_player"] = self.harm_ratio_value
-        self.mod_index_value = sf.BufferPlayer(self.mod_index_buffer, loop=True)
-        self.params["mod_index"]["buffer_player"] = self.mod_index_value
-        self.amplitude_value = sf.BufferPlayer(self.amplitude_buffer, loop=True)
-        self.params["amplitude"]["buffer_player"] = self.amplitude_value
-        self.panning_value = sf.BufferPlayer(self.panning_buffer, loop=True)
-        self.params["panning"]["buffer_player"] = self.panning_value
-        self.lp_cutoff_value = sf.BufferPlayer(self.lp_cutoff_buffer, loop=True)
-        self.params["lp_cutoff"]["buffer_player"] = self.lp_cutoff_value
-        self.lp_resonance_value = sf.BufferPlayer(self.lp_resonance_buffer, loop=True)
-        self.params["lp_resonance"]["buffer_player"] = self.lp_resonance_value
-        self.hp_cutoff_value = sf.BufferPlayer(self.hp_cutoff_buffer, loop=True)
-        self.params["hp_cutoff"]["buffer_player"] = self.hp_cutoff_value
-        self.hp_resonance_value = sf.BufferPlayer(self.hp_resonance_buffer, loop=True)
-        self.params["hp_resonance"]["buffer_player"] = self.hp_resonance_value
-
-        # Clip the resonance values to avoid filter instability
-        self.lp_resonance_value_clip = sf.Clip(self.lp_resonance_value, 0, 0.999)
-        self.hp_resonance_value_clip = sf.Clip(self.hp_resonance_value, 0, 0.999)
-        
-        graph = sf.AudioGraph.get_shared_graph()
-        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
-        carrier_freq_smooth = sf.Smooth(self.carrier_freq_value, mix_val)
-        harm_ratio_smooth = sf.Smooth(self.harm_ratio_value, mix_val)
-        mod_index_smooth = sf.Smooth(self.mod_index_value, mix_val)
-        amplitude_smooth = sf.Smooth(self.amplitude_value, mix_val)
-        panning_smooth = sf.Smooth(self.panning_value, mix_val) # still between -1 and 1
-        lp_cutoff_smooth = sf.Smooth(self.lp_cutoff_value, mix_val)
-        lp_resonance_smooth = sf.Smooth(self.lp_resonance_value_clip, mix_val)
-        hp_cutoff_smooth = sf.Smooth(self.hp_cutoff_value, mix_val)
-        hp_resonance_smooth = sf.Smooth(self.hp_resonance_value_clip, mix_val)
-
-        mod_freq = carrier_freq_smooth * harm_ratio_smooth
-        mod_amp = mod_freq * mod_index_smooth
-        modulator = sf.SineOscillator(mod_freq) * mod_amp
-        carrier = sf.SineOscillator(carrier_freq_smooth + modulator)
-        lp = sf.SVFilter(carrier, filter_type="low_pass", cutoff=lp_cutoff_smooth, resonance=lp_resonance_smooth)
-        hp = sf.SVFilter(lp, filter_type="high_pass", cutoff=hp_cutoff_smooth, resonance=hp_resonance_smooth)
-        output = Mixer(hp * amplitude_smooth, panning_smooth * 0.5 + 0.5, out_channels=2) # pan all channels in a stereo space with the pansig scaled between 0 and 1
-        
-        self.set_output(output)
-
-        self.id = str(id(self))
-        self.create_ui()
-
-        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
-
-    def set_input_buf(self, name, value, from_slider=False):
-        self.params[name]["buffer"].data[:, :] = value
-        if not from_slider and self.num_channels == 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.unobserve_all()
-            slider_value = value if self.num_channels == 1 else array2str(value)
-            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
-        elif not from_slider and self.num_channels > 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.value = array2str(value)
-    
-    def update_slider(self, slider, value):
-        slider.unobserve_all()
-        slider.value = value
-        slider.observe(
-            lambda change: self.set_input_buf(
-                    change["owner"].tag, 
-                    change["new"],
-                    from_slider=True
-                ), 
-                names="value")
-
-    def reset_to_default(self):
-        for param in self.params:
-            self.set_input_buf(param, np.array(self.params[param]["default"]).reshape(self.num_channels, 1), from_slider=False)
-
-    def __getitem__(self, key):
-        return self.params[key]
-    
-    def create_ui(self):
-        self._ui = SynthCard(
-            name=self.name,
-            id=self.id,
-            params=self.params,
-            num_channels=self.num_channels
-        )
-        self._ui.synth = self
-
-    @property
-    def ui(self):
-        return self._ui()
+        # call the parent constructor
+        super().__init__(_spec, params_dict=_params, name=name)
     
     def __repr__(self):
-        return f"Oscillator {self.id}: {self.name}"
+        return f"SimpleFM {self.id}: {self.name}"
     
 
 class Envelope(sf.Patch):
@@ -1008,3 +663,68 @@ class LinearSmooth(sf.Patch):
         graph.add_node(sf.HistoryBufferWriter(current_value_buf, out))
         graph.add_node(sf.HistoryBufferWriter(history_buf, input_sig))
         self.set_output(out)
+
+
+def patch_spec2dict(spec: sf.PatchSpec) -> Dict:
+    """
+    Convert a patch spec to a python dict.
+    """
+    spec_dict = json.loads(spec.to_json())
+    return spec_dict
+
+
+def patch_dict2spec(spec_dict: Dict) -> sf.PatchSpec:
+    """
+    Convert a python dict to a patch spec.
+    """
+    spec = sf.PatchSpec.from_json(json.dumps(spec_dict))
+    return spec
+
+
+def get_spec_input_names(spec: sf.PatchSpec) -> List[str]:
+    """
+    Get the inputs of a patch spec.
+    """
+    spec_dict = patch_spec2dict(spec)
+    inputs = spec_dict["inputs"]
+    input_names = [input["patch_input_name"] for input in inputs]
+    return input_names
+
+
+def get_spec_inputs_dict(spec: sf.PatchSpec) -> Dict:
+    """
+    Get the inputs of a patch spec as a dict, where keys are the
+    'patch_input_name' and values are the corresponding node values.
+    """
+    spec_dict = patch_spec2dict(spec)
+    inputs = spec_dict["inputs"]
+    nodes = spec_dict["nodes"]
+    out_dict = {}
+    for input in inputs:
+        input_name = input["patch_input_name"]
+        node_id = input["node_id"]
+        node_input_name = input["node_input_name"]
+        # find the node with the same id
+        node = find_dict_with_entry(nodes, "id", node_id)
+        input_value = node["inputs"][node_input_name]
+        # if the value is a dict it means there is a channel-array node that holds the values
+        if isinstance(input_value, dict):
+            channel_array_id = input_value["id"]
+            # find the channel array node
+            channel_array_node = find_dict_with_entry(nodes, "id", channel_array_id)
+            # check that it is really a channel array node
+            assert channel_array_node["node"] == "channel-array"
+            # get the values
+            input_value = channel_array_node["inputs"] # this is a dict
+            # convert to list
+            input_value = [val for val in input_value.values()]
+        out_dict[input_name] = input_value
+    return out_dict
+
+
+def get_patch_spec_num_output_channels(spec: sf.PatchSpec) -> int:
+    """
+    Get the number of output channels of a patch spec.
+    """
+    patch = sf.Patch(spec)
+    return patch.output.num_output_channels
