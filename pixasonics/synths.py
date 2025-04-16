@@ -183,8 +183,8 @@ class Theremin(Synth):
         # create the params dict
         _params = {
             "frequency": {
-                "min": 20,
-                "max": 20000,
+                "min": 60,
+                "max": 4000,
                 "unit": "Hz",
                 "scale": "log",
             },
@@ -259,8 +259,8 @@ class Oscillator(Synth):
         # create the params dict
         _params = {
             "frequency": {
-                "min": 20,
-                "max": 20000,
+                "min": 60,
+                "max": 4000,
                 "unit": "Hz",
                 "scale": "log",
             },
@@ -441,7 +441,7 @@ class SimpleFM(Synth):
         _params = {
             "carrier_freq": {
                 "min": 20,
-                "max": 20000,
+                "max": 8000,
                 "unit": "Hz",
                 "scale": "log",
             },
