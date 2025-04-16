@@ -1105,8 +1105,8 @@ class Mapper():
     """Map between two buffers. Typically from a feature buffer to a parameter buffer."""
     def __init__(
             self, 
-            obj_in, 
-            obj_out,
+            source: Feature, 
+            target: Dict | List[Dict],
             in_low = None,
             in_high = None,
             out_low = None,
@@ -1117,11 +1117,9 @@ class Mapper():
 
     ):
         self.name = name
-        self.obj_in = obj_in
-        self.obj_out = obj_out
-
-        # expecting a synth's param dict here
-        self.obj_out_owner = self.obj_out["owner"]
+        self.source = source
+        self.targets = target if isinstance(target, list) else [target]
+        self.num_targets = len(self.targets)
 
         # save scaling parameters
         self._in_low = in_low
@@ -1133,11 +1131,13 @@ class Mapper():
 
         self.id = str(id(self))
 
+        card_to_name = [target["name"] for target in self.targets]
+
         self._ui = MapperCard(
             name=self.name,
             id=self.id,
-            from_name=self.obj_in.name,
-            to_name=self.obj_out["name"],
+            from_name=self.source.name,
+            to_name=card_to_name,
         )
         self._ui.mapper = self
 
@@ -1161,15 +1161,12 @@ class Mapper():
         self._clamp = value
 
     @property
-    def buf_in(self):
-        # if the input object is an instance of a feature, then we want to map the output of the feature
-        # to the input of the object
-        if isinstance(self.obj_in, Feature):
-            return self.obj_in.features
-        # elif isinstance(self.obj_in, dict):
-        #     self.buf_in = self.obj_in["buffer"]
+    def source_buffer(self):
+        # for now only expect Feature objects as the source
+        if isinstance(self.source, Feature):
+            return self.source.features
         else:
-            raise ValueError("Input object must be a Feature")
+            raise TypeError("Input object must be a Feature")
 
     @property
     def nrt(self):
@@ -1180,15 +1177,24 @@ class Mapper():
         self._nrt = value
         # if switched on,
         if value:
-            # create output buffer
-            self._output_buffer = sf.Buffer(self.obj_out_owner.num_channels, self._app._render_nframes)
-            self._output_buffer.sample_rate = self._app.fps
-            # set target synth's buffer player to the new buffer
-            self.obj_out["buffer_player"].set_buffer("buffer", self._output_buffer)
+            # create a list for output buffers
+            self._output_buffers = []
+            # loop throuh all targets
+            for i in range(self.num_targets):
+                # get the target synth
+                target_synth = self.targets[i]["owner"]
+                # create output buffer
+                _output_buffer = sf.Buffer(target_synth.num_channels, self._app._render_nframes)
+                _output_buffer.sample_rate = self._app.fps
+                self._output_buffers.append(_output_buffer)
+                # set target synth's buffer player to the new buffer
+                self.targets[i]["buffer_player"].set_buffer("buffer", _output_buffer)
         # if switched off,
         else:
-            # set target synth's buffer player back to its internal param buffer
-            self.obj_out["buffer_player"].set_buffer("buffer", self.obj_out["buffer"])
+            # loop through all targets
+            for i in range(self.num_targets):
+                # set target synth's buffer player back to its internal param buffer
+                self.targets[i]["buffer_player"].set_buffer("buffer", self.targets[i]["buffer"])
 
 
     @property
@@ -1196,15 +1202,13 @@ class Mapper():
         return self._ui()
 
     def __repr__(self):
-        return f"Mapper {self.id}: {self.obj_in.name} -> {self.obj_out['name']}"
+        return f"Mapper {self.id}: {self.source.name} -> {[target['name'] + '; ' for target in self.targets]}" # show all targets
 
     @property
     def in_low(self):
         if self._in_low is None:
-            if isinstance(self.obj_in, Feature):
-                return self.obj_in.min
-            elif isinstance(self.obj_in, dict):
-                return self.obj_in["min"]
+            if isinstance(self.source, Feature):
+                return self.source.min
         else:
             return self._in_low
         
@@ -1215,10 +1219,8 @@ class Mapper():
     @property
     def in_high(self):
         if self._in_high is None:
-            if isinstance(self.obj_in, Feature):
-                return self.obj_in.max
-            elif isinstance(self.obj_in, dict):
-                return self.obj_in["max"]
+            if isinstance(self.source, Feature):
+                return self.source.max
         else:
             return self._in_high
         
@@ -1229,7 +1231,7 @@ class Mapper():
     @property
     def out_low(self):
         if self._out_low is None:
-            return self.obj_out["min"]
+            return [target["min"] for target in self.targets]
         else:
             return self._out_low
         
@@ -1240,7 +1242,7 @@ class Mapper():
     @property
     def out_high(self):
         if self._out_high is None:
-            return self.obj_out["max"]
+            return [target["max"] for target in self.targets]
         else:
             return self._out_high
         
@@ -1248,45 +1250,104 @@ class Mapper():
     def out_high(self, value):
         self._out_high = value
 
+    def project_to_channels(self, in_data: np.ndarray, num_channels: int) -> np.ndarray:
+        in_data_resized = in_data.astype(np.float64)
+        if in_data_resized.shape[0] != num_channels:
+            in_data_resized = resize_interp(in_data_resized.flatten(), num_channels)
+            in_data_resized = in_data_resized.reshape(num_channels, 1)
+        return in_data_resized
 
-    def map(self, frame=None):
-        if self.buf_in.data.shape[0] != self.obj_out_owner.num_channels:
-            in_data = resize_interp(self.buf_in.data.flatten(), self.obj_out_owner.num_channels)
-            in_data = in_data.reshape(self.obj_out_owner.num_channels, 1)
-            in_low = resize_interp(self.in_low.flatten(), self.obj_out_owner.num_channels)
-            in_low = in_low.reshape(self.obj_out_owner.num_channels, 1)
-            in_high = resize_interp(self.in_high.flatten(), self.obj_out_owner.num_channels)
-            in_high = in_high.reshape(self.obj_out_owner.num_channels, 1)
-            scaled_val = scale_array_exp(
-                in_data,
-                in_low,
-                in_high,
-                self.out_low,
-                self.out_high,
-                self.exponent
-            ) # shape: (num_features, 1)
-        else:
+
+    def map(self, in_data: np.ndarray) -> List[np.ndarray]:
+        """
+        Map the source buffer's data (in_data) to all target Synth parameter buffers.
+        The default function will also resize-interpolate in_data (with pixasonics.utils.resize_interp) 
+        to each target Synth's number of channels before performing the mapping
+        (with pixasonics.utils.scale_array_exp).
+        For custom mapping schemes, this function can be overridden in subclasses.
+        The function should return a list of numpy arrays, one for each target Synth.
+        Each numpy array should have a shape of (channels, 1), where channels is the 
+        number of channels of the target Synth.
+
+        Args:
+            in_data (np.ndarray): The data fetched from the source Feature buffer. This is typically a 2D numpy array of shape (num_features, 1).
+
+        Returns:
+            List[np.ndarray]: A list of numpy arrays, one for each target Synth. Each numpy array should have a shape of (channels, 1), where channels is the number of channels of the target Synth.
+        """
+
+        # loop through targets
+        out_data = []
+        for i in range(self.num_targets):
+            # resize interpolate in_data, in_low and in_high to the target Synth's number of channels
+            target_num_channels = self.targets[i]["owner"].num_channels
+            in_data_resized = self.project_to_channels(in_data, target_num_channels)
+            in_low = self.project_to_channels(self.in_low, target_num_channels)
+            in_high = self.project_to_channels(self.in_high, target_num_channels)
+            # fetch the corresponding output range bounds and scaling exponent (if they are lists)
+            out_low = self.out_low[i] if isinstance(self.out_low, list) else self.out_low
+            out_high = self.out_high[i] if isinstance(self.out_high, list) else self.out_high
+            exponent = self.exponent[i] if isinstance(self.exponent, list) else self.exponent
             # scale the input buffer to the output buffer
             scaled_val = scale_array_exp(
-                self.buf_in.data,
-                self.in_low,
-                self.in_high,
-                self.out_low,
-                self.out_high,
-                self.exponent
-            ) # shape: (num_features, 1)
+                in_data_resized,
+                in_low,
+                in_high,
+                np.array(out_low).astype(np.float64),
+                np.array(out_high).astype(np.float64),
+                float(exponent)
+            ) # shape: (num_channels, 1)
+            out_data.append(scaled_val)
+        # return the list of scaled values
+        return out_data
+
+    def clamp_mappings(self, mappings: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Clamp the mappings to the output range.
+        This is a convenience function that can be used to clamp the mappings
+        to the output range defined by out_low and out_high.
+        This is called after self.map() with its results.
+
+        Args:
+            mappings (List[np.ndarray]): The list of mappings to clamp.
+
+        Returns:
+            List[np.ndarray]: The clamped mappings.
+        """
+        clamped_mappings = []
+        for i, mapping in enumerate(mappings):
+            out_low = self.out_low[i] if isinstance(self.out_low, list) else self.out_low
+            out_high = self.out_high[i] if isinstance(self.out_high, list) else self.out_high
+            clamped_mapping = np.clip(mapping, out_low, out_high)
+            clamped_mappings.append(clamped_mapping)
+        return clamped_mappings
+    
+
+    def _map(self, frame=None):
+        # get the feature data from its buffer
+        in_data = self.source_buffer.data
+        mappings = self.map(in_data)
 
         if self.clamp:
-            scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
+            mappings = self.clamp_mappings(mappings)
 
         if not self.nrt:
-            self.obj_out_owner.set_input(
-                self.obj_out["param_name"],
-                scaled_val,
-                from_slider=False
-            )
+            # if we are in real-time mode, set all targets parameters to the scaled values
+            for i in range(self.num_targets):
+                scaled_val = mappings[i]
+                target_synth = self.targets[i]["owner"]
+                # set the parameter to the scaled value
+                target_synth.set_input(
+                    self.targets[i]["param_name"],
+                    scaled_val,
+                    from_slider=False
+                )
         else:
-            self._output_buffer.data[:, frame] = scaled_val[:, 0]
+            # if we are in NRT mode, record the mappings to the output buffers
+            for i in range(self.num_targets):
+                scaled_val = mappings[i]
+                target_output_buffer = self._output_buffers[i]
+                target_output_buffer.data[:, frame] = scaled_val[:, 0]
 
     def __call__(self, frame=None):
-        self.map(frame)
+        self._map(frame)
