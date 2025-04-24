@@ -609,7 +609,7 @@ class App():
             mapper(frame)
         
 
-    def load_image_file(self, image_path):
+    def load_image_file(self, image_path: str, refresh_features: bool = True) -> None:
         img = Image.open(image_path)
         if img.size != self.image_size:
             img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
@@ -646,11 +646,12 @@ class App():
             self.redraw_background()
 
         # re-trigger image processing in already attached features
-        for feature in self.features:
-            feature.app = self
+        if refresh_features:
+            for feature in self.features:
+                feature.app = self
 
 
-    def load_image_data(self, img_data):
+    def load_image_data(self, img_data: np.ndarray, refresh_features: bool = True) -> None:
         if img_data.shape[0:2] != self.image_size:
             img_data = self.resize_image_data(img_data)
         self.bg_hires = img_data
@@ -689,11 +690,12 @@ class App():
             self.redraw_background()
 
         # re-trigger image processing in already attached features
-        for feature in self.features:
-            feature.app = self
+        if refresh_features:
+            for feature in self.features:
+                feature.app = self
 
     
-    def resize_image_data(self, img_data):
+    def resize_image_data(self, img_data: np.ndarray) -> np.ndarray:
         # if 3D, add a layer dimension
         if len(img_data.shape) == 3:
             img_data = img_data[..., None]
