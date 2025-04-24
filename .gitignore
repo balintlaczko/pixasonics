@@ -9,6 +9,7 @@
 peaks/
 *.wav
 analyze_workshop_feedback.ipynb
+*.maxpat
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
