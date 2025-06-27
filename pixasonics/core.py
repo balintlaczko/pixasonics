@@ -9,7 +9,7 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 import threading
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Union
 
 class AppRegistry:
     _instance = None
@@ -1108,27 +1108,26 @@ class Mapper():
     def __init__(
             self, 
             source: Feature, 
-            target: Dict | List[Dict],
-            in_low = None,
-            in_high = None,
-            out_low = None,
-            out_high = None,
-            exponent = 1,
+            target: Union[Dict, List[Dict]],
+            in_low: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            in_high: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            out_low: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            out_high: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            exponent: Optional[Union[int, float, List[Union[int, float]]]] = 1.0,
             clamp: bool = True,
             name: str = "Mapper"
-
     ):
         self.name = name
         self.source = source
         self.targets = target if isinstance(target, list) else [target]
         self.num_targets = len(self.targets)
 
-        # save scaling parameters
-        self._in_low = in_low
-        self._in_high = in_high
-        self._out_low = out_low
-        self._out_high = out_high
-        self._exponent = exponent
+        # save scaling parameters (through setters)
+        self.in_low = in_low
+        self.in_high = in_high
+        self.out_low = out_low
+        self.out_high = out_high
+        self.exponent = exponent
         self._clamp = clamp
 
         self.id = str(id(self))
@@ -1152,7 +1151,17 @@ class Mapper():
     
     @exponent.setter
     def exponent(self, value):
-        self._exponent = value
+        if isinstance(value, float):
+            self._exponent = value
+        elif isinstance(value, int):
+            self._exponent = float(value)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("exponent must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "exponent must have the same length as the number of targets"
+            self._exponent = [float(v) for v in value]
+        else:
+            raise TypeError("exponent must be a number or a list of numbers")
 
     @property
     def clamp(self):
@@ -1216,7 +1225,16 @@ class Mapper():
         
     @in_low.setter
     def in_low(self, value):
-        self._in_low = value
+        if value is None:
+            self._in_low = None
+        elif isinstance(value, (int, float)):
+            self._in_low = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("in_low must be a number or a list of numbers")
+            self._in_low = np.array(value).astype(np.float64)
+        else:
+            raise TypeError("in_low must be a number or a list of numbers")
     
     @property
     def in_high(self):
@@ -1228,7 +1246,16 @@ class Mapper():
         
     @in_high.setter
     def in_high(self, value):
-        self._in_high = value
+        if value is None:
+            self._in_high = None
+        elif isinstance(value, (int, float)):
+            self._in_high = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("in_high must be a number or a list of numbers")
+            self._in_high = np.array(value).astype(np.float64)
+        else:
+            raise TypeError("in_high must be a number or a list of numbers")
 
     @property
     def out_low(self):
@@ -1239,7 +1266,17 @@ class Mapper():
         
     @out_low.setter
     def out_low(self, value):
-        self._out_low = value
+        if value is None:
+            self._out_low = None
+        elif isinstance(value, (int, float)):
+            self._out_low = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("out_low must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "out_low must have the same length as the number of targets"
+            self._out_low = [np.array([v]).astype(np.float64) for v in value]
+        else:
+            raise TypeError("out_low must be a number or a list of numbers")
 
     @property
     def out_high(self):
@@ -1250,7 +1287,17 @@ class Mapper():
         
     @out_high.setter
     def out_high(self, value):
-        self._out_high = value
+        if value is None:
+            self._out_high = None
+        elif isinstance(value, (int, float)):
+            self._out_high = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("out_high must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "out_high must have the same length as the number of targets"
+            self._out_high = [np.array([v]).astype(np.float64) for v in value]
+        else:
+            raise TypeError("out_high must be a number or a list of numbers")
 
     def project_to_channels(self, in_data: np.ndarray, num_channels: int) -> np.ndarray:
         in_data_resized = in_data.astype(np.float64)
@@ -1295,9 +1342,9 @@ class Mapper():
                 in_data_resized,
                 in_low,
                 in_high,
-                np.array(out_low).astype(np.float64),
-                np.array(out_high).astype(np.float64),
-                float(exponent)
+                out_low,
+                out_high,
+                exponent
             ) # shape: (num_channels, 1)
             out_data.append(scaled_val)
         # return the list of scaled values
