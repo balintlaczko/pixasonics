@@ -2,7 +2,7 @@
 
 ![Status](https://img.shields.io/pypi/status/pixasonics) [![Version](https://img.shields.io/pypi/v/pixasonics)](https://pypi.org/project/pixasonics/) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/balintlaczko/pixasonics/HEAD?urlpath=%2Fdoc%2Ftree%2Fpixasonics%2Fpixasonics_tutorial.ipynb)
 
-![A screenshot of the graphical user interface](pixasonics/figures/interface_screenshot.png)
+![A screenshot of the graphical user interface](pixasonics/figures/interface_screenshot_2.png)
 
 Some test images (such as the one in the above figure) are included from the [CELLULAR dataset](https://zenodo.org/records/8315423).
 
