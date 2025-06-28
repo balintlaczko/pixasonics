@@ -3,6 +3,7 @@ from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlide
 from math import log10
 from .utils import array2str, scale_array_exp
 import numpy as np
+from typing import List
 
 class MapperCard():
     def __init__(
@@ -10,7 +11,7 @@ class MapperCard():
             name: str = "Mapper",
             id: str = "# ID", 
             from_name: str = "(mapping source)",
-            to_name: str = "(mapping target)",
+            to_name: List[str] = ["(mapping target)"],
     ):
         self.name = name
         self.id = id
@@ -52,7 +53,8 @@ class MapperCard():
             layout=Layout(justify_content='space-between'))
 
         to_label = Label(value="To:")
-        to_value = Label(value=self.to_name)
+        # to_value = Label(value=self.to_name)
+        to_value = VBox([Label(value=x) for x in self.to_name])
         to_row = Box(
             [to_label, to_value], 
             layout=Layout(justify_content='space-between'))
@@ -323,7 +325,7 @@ class SynthCard():
                     raise ValueError(f"SynthCard: Unknown scale '{param['scale']}' for parameter '{param_name}'")
                 param_slider.tag = param_name
                 param_slider.observe(
-                    lambda change: self.synth.set_input_buf(
+                    lambda change: self.synth.set_input(
                         change["owner"].tag, 
                         change["new"],
                         from_slider=True

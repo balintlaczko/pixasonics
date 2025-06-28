@@ -9,7 +9,7 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 import threading
-
+from typing import List, Tuple, Dict, Optional, Union
 
 class AppRegistry:
     _instance = None
@@ -30,6 +30,18 @@ class AppRegistry:
         for app in self._apps:
             if app != notifier:
                 app.create_audio_graph()
+
+    def notify_pause(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app._audio_prev = app.audio
+                app.audio = False
+
+    def notify_resume(self, notifier):
+        for app in self._apps:
+            if app != notifier:
+                app.audio = app._audio_prev
+                app._audio_prev = None
 
 class App():
     def __init__(
@@ -85,6 +97,7 @@ class App():
         self._display_layer_offset = Model(0)
         self._image_is_loaded = False
         self._headless = headless
+        self._draw_lock = False # True disables self.draw()
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -161,7 +174,12 @@ class App():
         changed = value != self._nrt
         self._nrt = value
         if changed:
-            self.create_audio_graph()
+            if value:
+                # when swtiched to NRT, remove our graph from the global graph
+                self.audio = False
+        # enable/disable the Audio button
+        self.toggle_audio_btn(not value)
+        # notify mappers
         for mapper in self.mappers:
             mapper.nrt = value
 
@@ -453,15 +471,11 @@ class App():
     def create_audio_graph(self):
         # Get or create the shared audio graph
         self.graph = sf.AudioGraph.get_shared_graph()
-        if self.graph is not None and self.nrt:
-            self.graph.destroy()
-            self.graph = None
         if self.graph is None:
-            output_device = sf.AudioOut_Dummy(2, buffer_size=self._output_buffer_size) if self.nrt else None
             config = sf.AudioGraphConfig()
             config.output_buffer_size = self._output_buffer_size
-            config.sample_rate = self._sample_rate # will have no effect in NRT mode, signalflow limitation: https://github.com/ideoforms/signalflow/issues/130
-            self.graph = sf.AudioGraph(config=config, start=True, output_device=output_device)
+            config.sample_rate = self._sample_rate
+            self.graph = sf.AudioGraph(config=config, start=True)
 
 
         # Master volume
@@ -489,20 +503,17 @@ class App():
         self.bus = sf.Bus(num_channels=2)
         self.audio_out = self.bus * self.master_volume_smooth * self.master_envelope_bus
 
-        # Check if HW has 2 channels
+        # if HW has 2 channels downmix to mono
         if self.graph.num_output_channels < 2:
             self.audio_out = sf.ChannelMixer(1, self.audio_out)
 
         # Add any registered synths to the bus
+        # TODO: with new synths (based on specs) we'll have to re-instantiate them here on a potentially new graph
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
-        # in NRT mode, unmute the global envelope
-        if self.nrt:
-            self.audio_out.play()
-            self.master_envelope.on()
-
-        # start graph if audio is enabled
+        # put the app's graph to the global graph if audio is enabled
+        # but not in nrt, because in that case we don't want to play the audio
         if self.audio > 0 and not self.nrt:
             self.audio_out.play()
             self.unmuted = self.unmuted # call the setter to update the envelope state
@@ -598,7 +609,7 @@ class App():
             mapper(frame)
         
 
-    def load_image_file(self, image_path):
+    def load_image_file(self, image_path: str, refresh_features: bool = True) -> None:
         img = Image.open(image_path)
         if img.size != self.image_size:
             img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
@@ -635,11 +646,12 @@ class App():
             self.redraw_background()
 
         # re-trigger image processing in already attached features
-        for feature in self.features:
-            feature.app = self
+        if refresh_features:
+            for feature in self.features:
+                feature.app = self
 
 
-    def load_image_data(self, img_data):
+    def load_image_data(self, img_data: np.ndarray, refresh_features: bool = True) -> None:
         if img_data.shape[0:2] != self.image_size:
             img_data = self.resize_image_data(img_data)
         self.bg_hires = img_data
@@ -678,11 +690,12 @@ class App():
             self.redraw_background()
 
         # re-trigger image processing in already attached features
-        for feature in self.features:
-            feature.app = self
+        if refresh_features:
+            for feature in self.features:
+                feature.app = self
 
     
-    def resize_image_data(self, img_data):
+    def resize_image_data(self, img_data: np.ndarray) -> np.ndarray:
         # if 3D, add a layer dimension
         if len(img_data.shape) == 3:
             img_data = img_data[..., None]
@@ -760,30 +773,76 @@ class App():
         self.canvas[0].put_image_data(self.bg_display, 0, 0)
 
 
-    def get_probe_matrix(self):
-        """Get the probe matrix from the background image."""
+    def get_probe_matrix(self) -> np.ndarray:
+        """
+        Get the probe matrix from the background image.
+        The probe matrix is a square region of the background image.
+        The size of the probe is determined by the probe_width and probe_height properties.
+        The position of the probe is determined by the probe_x and probe_y properties.
+        The probe is clamped to the image size, so that it doesn't go out of bounds.
+
+        Returns:
+            np.ndarray: The probe matrix.
+        """
         x_from = max(self.probe_x - self.probe_width//2, 0)
         y_from = max(self.probe_y - self.probe_height//2, 0)
         probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         return probe
     
 
-    def render_timeline_to_array(self, timeline):
+    def render_timeline_to_array(self, timeline: List[Tuple[float, Dict]]) -> np.ndarray:
+        """
+        Render the timeline to a new buffer and return it as a numpy array.
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+        Returns:
+            np.ndarray: The rendered audio buffer as a numpy array of shape (n_channels, n_samples), where n_channels is always 2 (i.e. stereo).
+        """
         out_buf = self.render_timeline(timeline)
         arr = np.copy(out_buf.data)
-        self.nrt = self._nrt_prev
-        AppRegistry().notify_reregister(self)
         return arr
     
 
-    def render_timeline_to_file(self, timeline, target_filename):
+    def render_timeline_to_file(
+            self, 
+            timeline: List[Tuple[float, Dict]],
+            target_filename: str,
+            ) -> None:
+        """
+        Render the timeline to a file. 
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+        The timeline is rendered to a new buffer and saved to the target filename.
+        The target filename must end with .wav.
+
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+            target_filename (str): The target filename to save the rendered audio to. The filename must end with .wav.
+        """
         out_buf = self.render_timeline(timeline)
         out_buf.save(target_filename)
-        self.nrt = self._nrt_prev
-        AppRegistry().notify_reregister(self)
     
 
-    def render_timeline(self, timeline):
+    def render_timeline(self, timeline: List[Tuple[float, Dict]]) -> sf.Buffer:
+        """
+        Render the timeline to a new buffer.
+        This function is for NRT rendering a timeline, which can be considered
+        as an "automation" for the size and position of the Probe. More precisely,
+        the timeline is a list of tuples, where each tuple contains the time
+        in seconds and the Probe settings for that time as a dictionary.
+
+        Args:
+            timeline (List[Tuple[float, Dict]]): The timeline to render. Each tuple contains the time in seconds and the Probe settings for that time.
+
+        Returns:
+            sf.Buffer: The rendered audio buffer.
+        """
         # create an output buffer to store the rendered audio
         last_time_s, _ = timeline[-1]
         self._output_samps = int(np.ceil(last_time_s * self.graph.sample_rate))
@@ -791,25 +850,76 @@ class App():
         _output_buffer = sf.Buffer(2, self._output_samps)
         _output_buffer.sample_rate = self.graph.sample_rate
 
-        # generate internal timeline buffers for each render frame
+        # step 1: save the before state, stop compute thread, enable draw lock, generate timeline frames, pause other apps
+        # save the before state
+        self._nrt_prev = self._nrt # save current nrt state for later
+        self._audio_prev = self.audio # save current audio state for later
+        self._unmuted_prev = self.unmuted # save current unmuted state for later
+        probe_x_prev = self.probe_x
+        probe_y_prev = self.probe_y
+        probe_width_prev = self.probe_width
+        probe_height_prev = self.probe_height
+        # stop compute thread
+        self.stop_compute_thread()
+        # enable draw lock
+        self._draw_lock = True
+        # generate automation lines
         timeline_frames = self.generate_timeline_frames(timeline, self._render_nframes, self.fps)
-        
-        # switch on NRT mode
-        self._nrt_prev = self._nrt
-        if not self.nrt:
-            self.graph.destroy()
-        self.nrt = True # call setter anyway to notify mappers
+        # stop audio in this app and in other apps
+        self.nrt = False # not yet, we need mappers to set the synths directly
+        self.audio = False
+        AppRegistry().notify_pause(self) # notify other apps to pause their audio
+        self.graph.stop()
+        self.graph.render_to_new_buffer(1) # "sync" the graph
 
-        # render the timeline
+        # step 2: initialize mappings & synths to the first frame 
+        # This is to avoid starting with an interpolation from wherever the Probe was before calling the render.
+        # Also to set the master envelope to 0
+        first_frame_settings = {key: val[0] for key, val in timeline_frames.items()}
+        # apply settings from first frame
+        self.render_frame(None, first_frame_settings) # trigger all mappings based on the Probe matrix of the first frame
+        self.audio = True # put audio on the graph
+        self.graph.render_to_new_buffer(1) # "sync" the graph
+        self.master_envelope.set_input("gate", 0) # stop the env
+        master_envelope_release_time_samps = int(np.ceil(self.master_envelope.release * self.graph.sample_rate))
+        dummy_length_samps = master_envelope_release_time_samps + 1000 # add a bit of padding to the dummy length
+        self.graph.render_to_new_buffer(dummy_length_samps)
+
+        # step 3: trigger the envelope and render everything until the start of the release
+        # switch on NRT mode
+        self.nrt = True # call setter to turn off audio to notify mappers
+        self.graph.render_to_new_buffer(1) # "sync" the graph
+        # render the timeline (record mappings for each frame)
         for frame in range(self._render_nframes):
             frame_settings = {key: val[frame] for key, val in timeline_frames.items()}
             self.render_frame(frame, frame_settings)
+        self.audio = True # put audio on the graph
+        self.master_envelope.set_input("gate", 1) # start the env
+        render_part1_length_samps = self._output_samps - master_envelope_release_time_samps
+        part1_buffer = self.graph.render_to_new_buffer(render_part1_length_samps)
 
-        # render NRT audio
-        self.graph.render_to_buffer(_output_buffer)
+        # step 4: render the release time
+        render_part2_length_samps = master_envelope_release_time_samps
+        self.master_envelope.set_input("gate", 0) # stop the env
+        # render the release time
+        part2_buffer = self.graph.render_to_new_buffer(render_part2_length_samps)
+        # combine the two buffers
+        _output_buffer.data[:, :] = np.concatenate([part1_buffer.data, part2_buffer.data], axis=1)
 
-        # destroy the graph
-        self.graph.destroy()
+        # step 5: restore the before state
+        self.nrt = self._nrt_prev # call setter to set audio btn and notify mappers
+        self.audio = self._audio_prev
+        self.unmuted = self._unmuted_prev
+        # restore the Probe state
+        self.probe_width = probe_width_prev
+        self.probe_height = probe_height_prev
+        self.probe_x = probe_x_prev
+        self.probe_y = probe_y_prev
+        AppRegistry().notify_resume(self) # notify other apps to resume their audio
+        self.graph.start() # start the global graph
+        self._draw_lock = False # disable draw lock
+        self.start_compute_thread() # start the compute thread
+        self.draw() # trigger a draw to update the canvas and update mappings to where they where before the render
 
         return _output_buffer
 
@@ -876,6 +986,10 @@ class App():
 
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
+        if self._draw_lock:
+            return
+        
+        # print("Drawing...")
         # Signal the compute thread to start processing
         self.compute_event.set()
 
@@ -953,9 +1067,23 @@ class App():
             if not self._headless:
                 audio_switch.style.text_color = 'green'
         else:
-            self.audio_out.stop()
+            try:
+                self.audio_out.stop()
+            except sf.NodeNotPlayingException:
+                pass
             if not self._headless:
                 audio_switch.style.text_color = 'black'
+
+    def toggle_audio_btn(self, value: bool):
+        if self._headless:
+            return
+        audio_switch = find_widget_by_tag(self.ui, "audio_switch")
+        if value:
+            audio_switch.disabled = False
+            audio_switch.description = 'Audio'
+        else:
+            audio_switch.disabled = True
+            audio_switch.description = 'NRT'
 
     def toggle_record(self):
         if not self._headless:
@@ -979,39 +1107,38 @@ class Mapper():
     """Map between two buffers. Typically from a feature buffer to a parameter buffer."""
     def __init__(
             self, 
-            obj_in, 
-            obj_out,
-            in_low = None,
-            in_high = None,
-            out_low = None,
-            out_high = None,
-            exponent = 1,
+            source: Feature, 
+            target: Union[Dict, List[Dict]],
+            in_low: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            in_high: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            out_low: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            out_high: Optional[Union[int, float, List[Union[int, float]]]] = None,
+            exponent: Optional[Union[int, float, List[Union[int, float]]]] = 1.0,
             clamp: bool = True,
             name: str = "Mapper"
-
     ):
         self.name = name
-        self.obj_in = obj_in
-        self.obj_out = obj_out
+        self.source = source
+        self.targets = target if isinstance(target, list) else [target]
+        self.num_targets = len(self.targets)
 
-        # expecting a synth's param dict here
-        self.obj_out_owner = self.obj_out["owner"]
-
-        # save scaling parameters
-        self._in_low = in_low
-        self._in_high = in_high
-        self._out_low = out_low
-        self._out_high = out_high
-        self._exponent = exponent
+        # save scaling parameters (through setters)
+        self.in_low = in_low
+        self.in_high = in_high
+        self.out_low = out_low
+        self.out_high = out_high
+        self.exponent = exponent
         self._clamp = clamp
 
         self.id = str(id(self))
 
+        card_to_name = [target["name"] for target in self.targets]
+
         self._ui = MapperCard(
             name=self.name,
             id=self.id,
-            from_name=self.obj_in.name,
-            to_name=self.obj_out["name"],
+            from_name=self.source.name,
+            to_name=card_to_name,
         )
         self._ui.mapper = self
 
@@ -1024,7 +1151,17 @@ class Mapper():
     
     @exponent.setter
     def exponent(self, value):
-        self._exponent = value
+        if isinstance(value, float):
+            self._exponent = value
+        elif isinstance(value, int):
+            self._exponent = float(value)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("exponent must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "exponent must have the same length as the number of targets"
+            self._exponent = [float(v) for v in value]
+        else:
+            raise TypeError("exponent must be a number or a list of numbers")
 
     @property
     def clamp(self):
@@ -1035,15 +1172,12 @@ class Mapper():
         self._clamp = value
 
     @property
-    def buf_in(self):
-        # if the input object is an instance of a feature, then we want to map the output of the feature
-        # to the input of the object
-        if isinstance(self.obj_in, Feature):
-            return self.obj_in.features
-        # elif isinstance(self.obj_in, dict):
-        #     self.buf_in = self.obj_in["buffer"]
+    def source_buffer(self):
+        # for now only expect Feature objects as the source
+        if isinstance(self.source, Feature):
+            return self.source.features
         else:
-            raise ValueError("Input object must be a Feature")
+            raise TypeError("Input object must be a Feature")
 
     @property
     def nrt(self):
@@ -1054,15 +1188,24 @@ class Mapper():
         self._nrt = value
         # if switched on,
         if value:
-            # create output buffer
-            self._output_buffer = sf.Buffer(self.obj_out_owner.num_channels, self._app._render_nframes)
-            self._output_buffer.sample_rate = self._app.fps
-            # set target synth's buffer player to the new buffer
-            self.obj_out["buffer_player"].set_buffer("buffer", self._output_buffer)
+            # create a list for output buffers
+            self._output_buffers = []
+            # loop throuh all targets
+            for i in range(self.num_targets):
+                # get the target synth
+                target_synth = self.targets[i]["owner"]
+                # create output buffer
+                _output_buffer = sf.Buffer(target_synth.num_channels, self._app._render_nframes)
+                _output_buffer.sample_rate = self._app.fps
+                self._output_buffers.append(_output_buffer)
+                # set target synth's buffer player to the new buffer
+                self.targets[i]["buffer_player"].set_buffer("buffer", _output_buffer)
         # if switched off,
         else:
-            # set target synth's buffer player back to its internal param buffer
-            self.obj_out["buffer_player"].set_buffer("buffer", self.obj_out["buffer"])
+            # loop through all targets
+            for i in range(self.num_targets):
+                # set target synth's buffer player back to its internal param buffer
+                self.targets[i]["buffer_player"].set_buffer("buffer", self.targets[i]["buffer"])
 
 
     @property
@@ -1070,97 +1213,190 @@ class Mapper():
         return self._ui()
 
     def __repr__(self):
-        return f"Mapper {self.id}: {self.obj_in.name} -> {self.obj_out['name']}"
+        return f"Mapper {self.id}: {self.source.name} -> {[target['name'] + '; ' for target in self.targets]}" # show all targets
 
     @property
     def in_low(self):
         if self._in_low is None:
-            if isinstance(self.obj_in, Feature):
-                return self.obj_in.min
-            elif isinstance(self.obj_in, dict):
-                return self.obj_in["min"]
+            if isinstance(self.source, Feature):
+                return self.source.min
         else:
             return self._in_low
         
     @in_low.setter
     def in_low(self, value):
-        self._in_low = value
+        if value is None:
+            self._in_low = None
+        elif isinstance(value, (int, float)):
+            self._in_low = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("in_low must be a number or a list of numbers")
+            self._in_low = np.array(value).astype(np.float64)
+        else:
+            raise TypeError("in_low must be a number or a list of numbers")
     
     @property
     def in_high(self):
         if self._in_high is None:
-            if isinstance(self.obj_in, Feature):
-                return self.obj_in.max
-            elif isinstance(self.obj_in, dict):
-                return self.obj_in["max"]
+            if isinstance(self.source, Feature):
+                return self.source.max
         else:
             return self._in_high
         
     @in_high.setter
     def in_high(self, value):
-        self._in_high = value
+        if value is None:
+            self._in_high = None
+        elif isinstance(value, (int, float)):
+            self._in_high = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("in_high must be a number or a list of numbers")
+            self._in_high = np.array(value).astype(np.float64)
+        else:
+            raise TypeError("in_high must be a number or a list of numbers")
 
     @property
     def out_low(self):
         if self._out_low is None:
-            return self.obj_out["min"]
+            return [target["min"] for target in self.targets]
         else:
             return self._out_low
         
     @out_low.setter
     def out_low(self, value):
-        self._out_low = value
+        if value is None:
+            self._out_low = None
+        elif isinstance(value, (int, float)):
+            self._out_low = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("out_low must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "out_low must have the same length as the number of targets"
+            self._out_low = [np.array([v]).astype(np.float64) for v in value]
+        else:
+            raise TypeError("out_low must be a number or a list of numbers")
 
     @property
     def out_high(self):
         if self._out_high is None:
-            return self.obj_out["max"]
+            return [target["max"] for target in self.targets]
         else:
             return self._out_high
         
     @out_high.setter
     def out_high(self, value):
-        self._out_high = value
-
-
-    def map(self, frame=None):
-        if self.buf_in.data.shape[0] != self.obj_out_owner.num_channels:
-            in_data = resize_interp(self.buf_in.data.flatten(), self.obj_out_owner.num_channels)
-            in_data = in_data.reshape(self.obj_out_owner.num_channels, 1)
-            in_low = resize_interp(self.in_low.flatten(), self.obj_out_owner.num_channels)
-            in_low = in_low.reshape(self.obj_out_owner.num_channels, 1)
-            in_high = resize_interp(self.in_high.flatten(), self.obj_out_owner.num_channels)
-            in_high = in_high.reshape(self.obj_out_owner.num_channels, 1)
-            scaled_val = scale_array_exp(
-                in_data,
-                in_low,
-                in_high,
-                self.out_low,
-                self.out_high,
-                self.exponent
-            ) # shape: (num_features, 1)
+        if value is None:
+            self._out_high = None
+        elif isinstance(value, (int, float)):
+            self._out_high = np.array([value]).astype(np.float64)
+        elif isinstance(value, list):
+            if not all(isinstance(v, (int, float)) for v in value):
+                raise TypeError("out_high must be a number or a list of numbers")
+            assert len(value) == self.num_targets, "out_high must have the same length as the number of targets"
+            self._out_high = [np.array([v]).astype(np.float64) for v in value]
         else:
+            raise TypeError("out_high must be a number or a list of numbers")
+
+    def project_to_channels(self, in_data: np.ndarray, num_channels: int) -> np.ndarray:
+        in_data_resized = in_data.astype(np.float64)
+        if in_data_resized.shape[0] != num_channels:
+            in_data_resized = resize_interp(in_data_resized.flatten(), num_channels)
+            in_data_resized = in_data_resized.reshape(num_channels, 1)
+        return in_data_resized
+
+
+    def map(self, in_data: np.ndarray) -> List[np.ndarray]:
+        """
+        Map the source buffer's data (in_data) to all target Synth parameter buffers.
+        The default function will also resize-interpolate in_data (with pixasonics.utils.resize_interp) 
+        to each target Synth's number of channels before performing the mapping
+        (with pixasonics.utils.scale_array_exp).
+        For custom mapping schemes, this function can be overridden in subclasses.
+        The function should return a list of numpy arrays, one for each target Synth.
+        Each numpy array should have a shape of (channels, 1), where channels is the 
+        number of channels of the target Synth.
+
+        Args:
+            in_data (np.ndarray): The data fetched from the source Feature buffer. This is typically a 2D numpy array of shape (num_features, 1).
+
+        Returns:
+            List[np.ndarray]: A list of numpy arrays, one for each target Synth. Each numpy array should have a shape of (channels, 1), where channels is the number of channels of the target Synth.
+        """
+
+        # loop through targets
+        out_data = []
+        for i in range(self.num_targets):
+            # resize interpolate in_data, in_low and in_high to the target Synth's number of channels
+            target_num_channels = self.targets[i]["owner"].num_channels
+            in_data_resized = self.project_to_channels(in_data, target_num_channels)
+            in_low = self.project_to_channels(self.in_low, target_num_channels)
+            in_high = self.project_to_channels(self.in_high, target_num_channels)
+            # fetch the corresponding output range bounds and scaling exponent (if they are lists)
+            out_low = self.out_low[i] if isinstance(self.out_low, list) else self.out_low
+            out_high = self.out_high[i] if isinstance(self.out_high, list) else self.out_high
+            exponent = self.exponent[i] if isinstance(self.exponent, list) else self.exponent
             # scale the input buffer to the output buffer
             scaled_val = scale_array_exp(
-                self.buf_in.data,
-                self.in_low,
-                self.in_high,
-                self.out_low,
-                self.out_high,
-                self.exponent
-            ) # shape: (num_features, 1)
+                in_data_resized,
+                in_low,
+                in_high,
+                out_low,
+                out_high,
+                exponent
+            ) # shape: (num_channels, 1)
+            out_data.append(scaled_val)
+        # return the list of scaled values
+        return out_data
+
+    def clamp_mappings(self, mappings: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Clamp the mappings to the output range.
+        This is a convenience function that can be used to clamp the mappings
+        to the output range defined by out_low and out_high.
+        This is called after self.map() with its results.
+
+        Args:
+            mappings (List[np.ndarray]): The list of mappings to clamp.
+
+        Returns:
+            List[np.ndarray]: The clamped mappings.
+        """
+        clamped_mappings = []
+        for i, mapping in enumerate(mappings):
+            out_low = self.out_low[i] if isinstance(self.out_low, list) else self.out_low
+            out_high = self.out_high[i] if isinstance(self.out_high, list) else self.out_high
+            clamped_mapping = np.clip(mapping, out_low, out_high)
+            clamped_mappings.append(clamped_mapping)
+        return clamped_mappings
+    
+
+    def _map(self, frame=None):
+        # get the feature data from its buffer
+        in_data = self.source_buffer.data
+        mappings = self.map(in_data)
 
         if self.clamp:
-            scaled_val = np.clip(scaled_val, self.out_low, self.out_high)
+            mappings = self.clamp_mappings(mappings)
 
         if not self.nrt:
-            self.obj_out_owner.set_input_buf(
-                self.obj_out["param_name"],
-                scaled_val,
-                from_slider=False
-            )
+            # if we are in real-time mode, set all targets parameters to the scaled values
+            for i in range(self.num_targets):
+                scaled_val = mappings[i]
+                target_synth = self.targets[i]["owner"]
+                # set the parameter to the scaled value
+                target_synth.set_input(
+                    self.targets[i]["param_name"],
+                    scaled_val,
+                    from_slider=False
+                )
         else:
-            self._output_buffer.data[:, frame] = scaled_val[:, 0]
+            # if we are in NRT mode, record the mappings to the output buffers
+            for i in range(self.num_targets):
+                scaled_val = mappings[i]
+                target_output_buffer = self._output_buffers[i]
+                target_output_buffer.data[:, frame] = scaled_val[:, 0]
 
     def __call__(self, frame=None):
-        self.map(frame)
+        self._map(frame)

@@ -2,6 +2,7 @@ import numpy as np
 from numba import jit
 import threading
 import time
+from typing import List, Dict
 
 def mix2samps(mixval, eps=1e-6):
     "Convert a mix value (used in sf.Smooth) to samples"
@@ -151,11 +152,28 @@ def broadcast_params(*param_lists):
     max_len = max([len(p) for p in param_lists])
     broadcasted_params = []
     for plist in param_lists:
+        # convert values to floats
+        plist = [float(p) for p in plist]
         if len(plist) < max_len:
             # interpolate
             plist = resize_interp(plist, max_len).tolist()
         broadcasted_params.append(plist)
     return broadcasted_params
+
+
+def find_dict_with_entry(list_of_dicts: List[Dict], key: str, value) -> Dict:
+    """
+    Find a dictionary in a list where a specific key has a given value.
+    
+    Args:
+        list_of_dicts (list): A list of dictionaries to search through
+        key (str): The key to search for in each dictionary
+        value: The value to match against the key
+        
+    Returns:
+        dict: The first dictionary where dict[key] == value, or None if no match is found
+    """
+    return next((d for d in list_of_dicts if key in d and d[key] == value), None)
 
 
 class Timer:
