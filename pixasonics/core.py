@@ -1,5 +1,5 @@
 from .features import Feature
-from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix
+from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, id2contour_cropped
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Synth, Envelope
 from ipycanvas import hold_canvas, MultiCanvas
@@ -66,6 +66,8 @@ class App():
         self.last_draw_time = time.time()
         self.bg_hires = np.zeros(image_size + (3,), dtype=np.float64)
         self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
+        self.mask = np.zeros(image_size + (3,), dtype=np.int64)
+        self.mask_display = np.zeros(image_size + (3,), dtype=np.uint8)
 
         # Private properties
         self._fps = fps
@@ -80,6 +82,8 @@ class App():
         self._probe_height = Model(50)
         self._probe_height_on_last_draw = 50
         self._probe_follows_idle_mouse = Model(False)
+        self._probe_with_mask = Model(False)
+        self._selected_mask_id = Model(1)
         self._interaction_mode = Model("Hold")
         self._last_mouse_down_time = 0
         self._master_volume = Model(0)
@@ -96,6 +100,8 @@ class App():
         self._display_channel_offset = Model(0)
         self._display_layer_offset = Model(0)
         self._image_is_loaded = False
+        self._mask_is_loaded = False
+        self._highest_mask_id = 0
         self._headless = headless
         self._draw_lock = False # True disables self.draw()
 
@@ -191,6 +197,47 @@ class App():
     def probe_follows_idle_mouse(self, value):
         self._probe_follows_idle_mouse.value = value
 
+    @property
+    def probe_with_mask(self):
+        return self._probe_with_mask.value
+
+    @probe_with_mask.setter
+    def probe_with_mask(self, value):
+        # if no mask is loaded keep it off
+        if not self._mask_is_loaded:
+            value = False
+        changed = value != self._probe_with_mask.value
+        self._probe_with_mask.value = value
+        if changed:
+            self.probe_with_mask_callbacks()
+
+    def probe_with_mask_callbacks(self):
+            self.selected_mask_id = self.get_mask_id_under_probe()
+            self.redraw_mask_contour()
+            self.draw()
+            # enable/disable selected mask ID numbox on UI
+            numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
+            numbox_selected_mask_id.disabled = not self.probe_with_mask
+
+    @property
+    def selected_mask_id(self):
+        return self._selected_mask_id.value
+
+    @selected_mask_id.setter
+    def selected_mask_id(self, value):
+        # clamp to valid range
+        value = int(np.clip(value, 0, self.highest_mask_id))
+        # repeat last value if 0
+        value = value if value != 0 else self._selected_mask_id.value
+        changed = value != self._selected_mask_id.value
+        self._selected_mask_id.value = value
+        if changed or self._unmuted_changed:
+            self.redraw_mask_contour()
+
+    @property
+    def highest_mask_id(self):
+        return self._highest_mask_id
+
     def clamp_probe_x(self, value):
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
         x_clamped = np.clip(value, self.probe_width//2, self.image_size[1]-1-self.probe_width//2)
@@ -208,6 +255,8 @@ class App():
     @probe_x.setter
     def probe_x(self, value):
         self._probe_x = self.clamp_probe_x(value)
+        if self.probe_with_mask:
+            self.selected_mask_id = self.get_mask_id_under_probe()
         if not self._nrt:
             self.draw()
     
@@ -218,6 +267,8 @@ class App():
     @probe_y.setter
     def probe_y(self, value):
         self._probe_y = self.clamp_probe_y(value)
+        if self.probe_with_mask:
+            self.selected_mask_id = self.get_mask_id_under_probe()
         if not self._nrt:
             self.draw()
 
@@ -225,6 +276,8 @@ class App():
         # Apply the clamped probe position without triggering a draw
         self._probe_x = self.clamp_probe_x(self.probe_x)
         self._probe_y = self.clamp_probe_y(self.probe_y)
+        if self.probe_with_mask:
+            self.selected_mask_id = self.get_mask_id_under_probe()
         if not self._nrt:
             self.draw()
 
@@ -416,7 +469,7 @@ class App():
 
         # Create the canvas
         self.canvas = MultiCanvas(
-            2,
+            3,
             width=self.image_size[1], 
             height=self.image_size[0])
         app_canvas = find_widget_by_tag(self.ui, "app_canvas")
@@ -449,6 +502,12 @@ class App():
         # Follow idle mouse checkbox
         chkbox_probe_follows_idle_mouse = find_widget_by_tag(self.ui, "probe_follows_idle_mouse")
         self._probe_follows_idle_mouse.bind_widget(chkbox_probe_follows_idle_mouse)
+        # Probe with mask checkbox
+        chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
+        self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self.probe_with_mask_callbacks)
+        # Selected mask ID numbox
+        numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
+        self._selected_mask_id.bind_widget(numbox_selected_mask_id, extra_callback=self.redraw_mask_contour)
 
         # Bind the audio settings widgets
         # Audio switch and master volume slider
@@ -610,55 +669,40 @@ class App():
         
 
     def load_image_file(self, image_path: str, refresh_features: bool = True) -> None:
+        """
+        Load an image file and update the internal state.
+        Uses PIL to open the image, then calls `load_image_data`.
+
+        Args:
+            image_path (str): The path to the image file.
+            refresh_features (bool, optional): Whether to refresh the currently attached Features after loading the image. Defaults to True.
+        """
         img = Image.open(image_path)
-        if img.size != self.image_size:
-            img = img.resize(self.image_size[::-1]) # PIL uses (W, H) instead of (H, W)
         img = np.array(img)
-        if len(img.shape) == 2:
-            img = img[..., None, None] # add channel and layer dimensions if single-channel
-        elif len(img.shape) == 3:
-            img = img[..., None] # add layer dimension if 3-channel
-        # print ("Image shape:", img.shape)
-        self.bg_hires = img
-        self.bg_display = None
-        if not self._headless:
-            self.bg_display = self.convert_image_data_for_display(
-                self.bg_hires, 
-                normalize=self.normalize_display, 
-                global_normalize=self.normalize_display_global)
-        
-        self._image_is_loaded = True
-
-        if not self._headless:
-            # Set layer offset to 0 and disable the slider
-            self._display_layer_offset.value = 0
-            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-            layer_offset_slider.disabled = True
-            layer_offset_slider.max = 0
-
-            # Set the channel offset to 0 and disable the slider
-            self._display_channel_offset.value = 0
-            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
-            channel_offset_slider.disabled = True
-            channel_offset_slider.max = 0
-
-            # Redraw the background with the new image
-            self.redraw_background()
-
-        # re-trigger image processing in already attached features
-        if refresh_features:
-            for feature in self.features:
-                feature.app = self
+        self.load_image_data(img, refresh_features=refresh_features)
 
 
     def load_image_data(self, img_data: np.ndarray, refresh_features: bool = True) -> None:
+        """
+        Load image data as a NumPy array. The Height and Width dimensions will be resized to match `image_size`.
+        The input will be reshaped to 4D: (Height, Width, Channels, Layers)
+
+        Args:
+            img_data (np.ndarray): The image data as a NumPy array.
+            refresh_features (bool, optional): Whether to refresh the currently attached Features after loading the image. Defaults to True.
+        """
+        # resize if H/W is not self.image_size
         if img_data.shape[0:2] != self.image_size:
             img_data = self.resize_image_data(img_data)
+        # make sure it is 4D
+        elif len(img_data.shape) != 4:
+            img_data = self.reshape_image_data(img_data)
         self.bg_hires = img_data
-        self.bg_display = self.convert_image_data_for_display(
-            self.bg_hires, 
-            normalize=self.normalize_display, 
-            global_normalize=self.normalize_display_global)
+        # if not self._headless:
+        #     self.bg_display = self.convert_image_data_for_display(
+        #         self.bg_hires, 
+        #         normalize=self.normalize_display, 
+        #         global_normalize=self.normalize_display_global)
         
         self._image_is_loaded = True
 
@@ -687,6 +731,7 @@ class App():
                 channel_offset_slider.disabled = True
                 channel_offset_slider.max = 0
 
+            # Redraw the background with the new image
             self.redraw_background()
 
         # re-trigger image processing in already attached features
@@ -694,11 +739,65 @@ class App():
             for feature in self.features:
                 feature.app = self
 
-    
-    def resize_image_data(self, img_data: np.ndarray) -> np.ndarray:
-        # if 3D, add a layer dimension
-        if len(img_data.shape) == 3:
-            img_data = img_data[..., None]
+
+    def load_mask_file(self, mask_path: str) -> None:
+        """
+        Load a mask (image) file.
+        Uses PIL to open the image, then calls `load_mask_data`.
+
+        Args:
+            mask_path (str): The path to the mask file.
+        """
+        mask = Image.open(mask_path)
+        mask = np.array(mask)
+        self.load_mask_data(mask)
+
+
+    def load_mask_data(self, mask_data: np.ndarray) -> None:
+        """
+        Load mask data as a NumPy array. The Height and Width dimensions will be resized to match `image_size`.
+        The input will be reshaped to 4D: (Height, Width, Channels, Layers)
+        Registers that the mask is loaded.
+
+        Args:
+            mask_data (np.ndarray): The mask data as a NumPy array.
+        """
+        # resize if H/W is not self.image_size
+        if mask_data.shape[0:2] != self.image_size:
+            mask_data = self.resize_image_data(mask_data, use_nearest=True)
+        # make sure it is 4D
+        elif len(mask_data.shape) != 4:
+            mask_data = self.reshape_image_data(mask_data)
+        self.mask = mask_data
+        self._mask_is_loaded = True
+        # set UI stuff
+        if not self._headless:
+            # run contour extraction once to JIT-compile function
+            id2contour_cropped(self.mask, 0)
+            # enable Probe with mask checkbox
+            chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
+            chkbox_probe_with_mask.disabled = False
+            # set maximum bound to the highest label ID
+            self._highest_mask_id = int(self.mask.max())
+            numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
+            numbox_selected_mask_id.max = self._highest_mask_id
+
+
+    def resize_image_data(self, img_data: np.ndarray, use_nearest: bool=False) -> np.ndarray:
+        """
+        Resize the image data to the App's image_size attribute.
+
+        Args:
+            img_data (np.ndarray): The image data to resize.
+            use_nearest (bool, optional): Whether to use nearest neighbor interpolation. Defaults to False, which then uses bicubic.
+
+        Returns:
+            np.ndarray: The resized image data.
+        """
+        # masks must use nearest neighbor interpolation
+        interp = Image.Resampling.NEAREST if use_nearest else Image.Resampling.BICUBIC
+        # make sure it is 4D
+        img_data = self.reshape_image_data(img_data)
         # loop through the layers and resize each one
         img_data_resized = np.zeros(self.image_size + img_data.shape[2:], dtype=img_data.dtype)
         for i in range(img_data.shape[3]):
@@ -706,9 +805,31 @@ class App():
             resized_layer = np.zeros(self.image_size + (layer.shape[2],), dtype=img_data.dtype)
             for j in range(layer.shape[2]):
                 img = Image.fromarray(layer[:, :, j])
-                resized_layer[:, :, j] = np.array(img.resize(self.image_size[::-1])) # PIL uses (W, H) instead of (H, W)
+                resized_layer[:, :, j] = np.array(img.resize(self.image_size[::-1], resample=interp)) # PIL uses (W, H) instead of (H, W)
             img_data_resized[:, :, :, i] = resized_layer
         return img_data_resized
+    
+
+    def reshape_image_data(self, img_data: np.ndarray) -> np.ndarray:
+        """
+        Reshape the image data to 4D (H, W, C, L).
+
+        Args:
+            img_data (np.ndarray): The image data to reshape.
+
+        Returns:
+            np.ndarray: The reshaped image data (always 4D).
+        """
+        # if 2D, add channel and layer dimensions
+        if len(img_data.shape) == 2:
+            img_data = img_data[..., None, None]
+        # if 3D, add a layer dimension
+        elif len(img_data.shape) == 3:
+            img_data = img_data[..., None]
+        # raise error if 2> or 4<
+        elif len(img_data.shape) < 2 or len(img_data.shape) > 4:
+            raise ValueError(f"Invalid image data shape, expected 2 to 4 dimensions, got {len(img_data.shape)}")
+        return img_data
 
 
     def convert_image_data_for_display(
@@ -717,7 +838,8 @@ class App():
             normalize=False, 
             global_normalize=False,
             channel_offset=0,
-            layer_offset=0
+            layer_offset=0,
+            add_transparency=False
             ):
         img = self.rescale_image_data_for_display(
             img_data, 
@@ -735,6 +857,9 @@ class App():
         # if more than 3 channels, slice 3 channels according to the channel offset
         elif img.shape[2] > 3:
             img = img[:, :, channel_offset:channel_offset+3]
+        # if adding transparency, copy the first channel into the alpha
+        if add_transparency:
+            img = np.concatenate([img, img[..., :1]], axis=2)
         return img
 
 
@@ -771,6 +896,45 @@ class App():
             layer_offset=self.display_layer_offset
             )
         self.canvas[0].put_image_data(self.bg_display, 0, 0)
+
+
+    def get_mask_id_under_probe(self):
+        if not self._mask_is_loaded:
+            raise ValueError("Mask is not loaded")
+        print(f"Mask ID under probe: {int(self.mask[self.probe_y, self.probe_x])}")
+        return int(self.mask[self.probe_y, self.probe_x])
+
+
+    def redraw_mask_contour(self):
+        if self._headless:
+            return
+        if self.nrt:
+            return
+        if not self._image_is_loaded:
+            return
+        if not self._mask_is_loaded:
+            return
+        # if not probing with masks, then clear the mask layer
+        if not self.probe_with_mask:
+            self.canvas[1].clear()
+            return
+        # escape if no mask is selected
+        if self.selected_mask_id == 0:
+            return
+        self.canvas[1].clear()
+        mask_filtered, y, x = id2contour_cropped(self.mask, self.selected_mask_id)
+        self.mask_display = self.convert_image_data_for_display(
+            mask_filtered,
+            normalize=True,
+            global_normalize=False,
+            channel_offset=self.display_channel_offset,
+            layer_offset=self.display_layer_offset,
+            add_transparency=True
+        )
+        self.mask_display[..., 2] = 0
+        if self.unmuted:
+            self.mask_display[..., 1] = 0 # turn off green (becomes red)
+        self.canvas[1].put_image_data(self.mask_display, x, y)
 
 
     def get_probe_matrix(self) -> np.ndarray:
@@ -998,15 +1162,16 @@ class App():
             return
         
         # Clear the canvas
-        self.canvas[1].clear()
+        self.canvas[2].clear()
 
         # Put the probe rectangle to the canvas
-        self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
-        self.canvas[1].stroke_rect(
-            int(self.probe_x - self.probe_width//2), 
-            int(self.probe_y - self.probe_height//2), 
-            int(self.probe_width), 
-            int(self.probe_height))
+        if not self.probe_with_mask:
+            self.canvas[2].stroke_style = 'red' if self.unmuted else 'yellow'
+            self.canvas[2].stroke_rect(
+                int(self.probe_x - self.probe_width//2), 
+                int(self.probe_y - self.probe_height//2), 
+                int(self.probe_width), 
+                int(self.probe_height))
         
         # update the probe_x and probe_y values in the UI
         probe_x_numbox = find_widget_by_tag(self.ui, "probe_x")
@@ -1051,6 +1216,8 @@ class App():
             # Update probe features, mappers, and render canvas
             # only draw when any of the probe params or unmuted has changed since the last draw
             if self._probe_changed or self._unmuted_changed:
+                if self.probe_with_mask:
+                    self.selected_mask_id = self.get_mask_id_under_probe()
                 self.draw()
 
 

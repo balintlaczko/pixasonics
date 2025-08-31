@@ -1,5 +1,5 @@
 from ipycanvas import Canvas, hold_canvas
-from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons, Checkbox
+from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, BoundedIntText, ToggleButtons, Checkbox
 from math import log10
 from .utils import array2str, scale_array_exp
 import numpy as np
@@ -687,7 +687,45 @@ class ProbeSettings():
                 height='auto')
         )
         probe_follows_idle_mouse_checkbox.tag = "probe_follows_idle_mouse"
-        
+
+        probe_with_mask_checkbox = Checkbox(
+            value=False,
+            description='Probe with mask',
+            tooltip='When enabled, the loaded mask data will be used for probing',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_with_mask_checkbox.tag = "probe_with_mask"
+        selected_mask_id_numbox_label = Label(value="Selected mask ID:")
+        selected_mask_id_numbox = BoundedIntText(
+            value=0,
+            min=0,
+            max=1,
+            disabled=True,
+            layout=Layout(width='20%')
+        )
+        selected_mask_id_numbox.tag = "selected_mask_id"
+        selected_mask_id_box = HBox(
+            [selected_mask_id_numbox_label, selected_mask_id_numbox],
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%'
+            )
+        )
+        probe_mask_settings_box = VBox(
+            [probe_with_mask_checkbox, selected_mask_id_box],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                width='100%',
+                # padding='5px'
+            )
+        )
+
         probe_x_label = Label(value="Probe X:")
         probe_x_value = IntText(
             value=0, 
@@ -726,7 +764,7 @@ class ProbeSettings():
                 flex_flow='row'))
 
         self.box = Box(
-            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, probe_xy_box], 
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, probe_mask_settings_box, probe_xy_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 

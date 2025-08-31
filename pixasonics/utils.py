@@ -143,6 +143,96 @@ def test_filter_matrix():
     assert b.shape == (1, 1, 1, 3)
 
 
+@jit(nopython=True)
+def id2contour(mask_img: np.ndarray, chosen_id: int) -> np.ndarray:
+    """
+    Convert a segmentation mask to a contour mask of a given label.
+    Returns an empty image of the same size as the input mask, with the contour drawn on it.
+
+    Args:
+        mask_img (np.ndarray): The segmentation mask (values represent labels).
+        chosen_id (int): The label ID to create a contour for.
+
+    Returns:
+        np.ndarray: The contour mask as a binary image.
+    """
+    mask_filtered = np.where(mask_img == chosen_id, 1, 0).astype(np.uint8)
+    # get the coordinates of the active pixels
+    active_pixels = np.argwhere(mask_filtered)
+    # get edge pixels
+    edge_left, edge_right = active_pixels[:, 1].min(), active_pixels[:, 1].max()
+    edge_top, edge_bottom = active_pixels[:, 0].min(), active_pixels[:, 0].max()
+    # crop the mask to the bounding box
+    mask_cropped = mask_filtered[edge_top:edge_bottom+1, edge_left:edge_right+1]
+    # loop through each row and keep only left-most and right-most pixels
+    mask_cropped_contour = np.zeros_like(mask_cropped)
+    for i in range(mask_cropped.shape[0]):
+        row = mask_cropped[i]
+        active_indices = np.where(row == 1)[0]
+        # for the first and last row, keep the whole row
+        if i == 0 or i == mask_cropped.shape[0] - 1:
+            mask_cropped_contour[i] = row
+        elif len(active_indices) > 0:
+            left_most = active_indices.min()
+            right_most = active_indices.max()
+            prev_row = mask_cropped[i - 1]
+            next_row = mask_cropped[i + 1]
+            # pixels that have only one active neighbor in the column (e.g., only above or below)
+            one_active = np.clip(np.where(prev_row + next_row == 1)[0], left_most, right_most)
+            row_mask = np.unique(np.concatenate((np.array([left_most, right_most]), one_active)))
+            new_row = np.zeros_like(row)
+            new_row[row_mask] = 1
+            mask_cropped_contour[i] = new_row * row # filter only pixels that were active in row
+    # replace mask with contour in the original image
+    mask_filtered[edge_top:edge_bottom+1, edge_left:edge_right+1] = mask_cropped_contour
+    return mask_filtered
+
+
+@jit(nopython=True)
+def id2contour_cropped(mask_img: np.ndarray, chosen_id: int) -> tuple[np.ndarray, int, int]:
+    """
+    Convert a segmentation mask to a contour mask of a given label.
+    Returns a cropped contour mask and its position.
+
+    Args:
+        mask_img (np.ndarray): The segmentation mask (values represent labels).
+        chosen_id (int): The label ID to create a contour for.
+
+    Returns:
+        np.ndarray: The contour mask as a binary image.
+        int: The top edge of the contour.
+        int: The left edge of the contour.
+    """
+    mask_filtered = np.where(mask_img == chosen_id, 1, 0).astype(np.uint8)
+    # get the coordinates of the active pixels
+    active_pixels = np.argwhere(mask_filtered)
+    # get edge pixels
+    edge_left, edge_right = active_pixels[:, 1].min(), active_pixels[:, 1].max()
+    edge_top, edge_bottom = active_pixels[:, 0].min(), active_pixels[:, 0].max()
+    # crop the mask to the bounding box
+    mask_cropped = mask_filtered[edge_top:edge_bottom+1, edge_left:edge_right+1]
+    # loop through each row and keep only left-most and right-most pixels
+    mask_cropped_contour = np.zeros_like(mask_cropped)
+    for i in range(mask_cropped.shape[0]):
+        row = mask_cropped[i]
+        active_indices = np.where(row == 1)[0]
+        # for the first and last row, keep the whole row
+        if i == 0 or i == mask_cropped.shape[0] - 1:
+            mask_cropped_contour[i] = row
+        elif len(active_indices) > 0:
+            left_most = active_indices.min()
+            right_most = active_indices.max()
+            prev_row = mask_cropped[i - 1]
+            next_row = mask_cropped[i + 1]
+            # pixels that have only one active neighbor in the column (e.g., only above or below)
+            one_active = np.clip(np.where(prev_row + next_row == 1)[0], left_most, right_most)
+            row_mask = np.unique(np.concatenate((np.array([left_most, right_most]), one_active)))
+            new_row = np.zeros_like(row)
+            new_row[row_mask] = 1
+            mask_cropped_contour[i] = new_row * row # filter only pixels that were active in row
+    return mask_cropped_contour, edge_top, edge_left
+
+
 def broadcast_params(*param_lists):
     """Helper function to broadcast and interpolate all param lists to the same length."""
     # if an input is a numpy array, convert it to a list
