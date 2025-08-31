@@ -2,7 +2,7 @@
 
 ![Status](https://img.shields.io/pypi/status/pixasonics) [![Version](https://img.shields.io/pypi/v/pixasonics)](https://pypi.org/project/pixasonics/) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/balintlaczko/pixasonics/HEAD?urlpath=%2Fdoc%2Ftree%2Fpixasonics%2Fpixasonics_tutorial.ipynb)
 
-![A screenshot of the graphical user interface](pixasonics/figures/interface_screenshot.png)
+![A screenshot of the graphical user interface](pixasonics/figures/interface_screenshot_2.png)
 
 Some test images (such as the one in the above figure) are included from the [CELLULAR dataset](https://zenodo.org/records/8315423).
 
@@ -67,9 +67,9 @@ Then you can explore the image data with a Probe (represented by the yellow rect
 
 Speaking of which, you can extract visual features using the `Feature` base class, or any of its convenience abstractions (e.g. `MeanChannelValue`). All basic statistical reductions are supported, such as `"mean"`, `"median"`, `"min"`, `"max"`, `"sum"`, `"std"` (standard deviation) and `"var"` (variance), but you can also make your own custom feature extractors by inheriting from the `Feature` base class (stay tuned for a K-means clustering example in the Advanced Use Cases section!). `Feature` objects also come with a UI that shows their current values and global/running min and max. There can be any number of different `Feature`s attached to the app, and all of them will get the same Probe matrix as input.
 
-Image features are to be mapped to synthesis parameters, that is, to the settings of sound-making gadgets. (This technique is called "Parameter Mapping Sonification" in the literature.) All `Synth`s (and audio) in pixasonics are based on the fantastic [signalflow library](https://signalflow.dev/). For now, there are 5 `Synth` classes that you can use (and many more are on the way): `Theremin`, `Oscillator`, `FilteredNoise`, and `SimpleFM`. Each `Synth` comes with a UI, where you can tweak the parameters (or see them being modulated by `Mapper`s) in real-time.
+Image features are to be mapped to synthesis parameters, that is, to the settings of sound-making gadgets. (This technique is called "Parameter Mapping Sonification" in the literature.) All `Synth`s (and audio) in Pixasonics are based on the fantastic [SignalFlow library](https://signalflow.dev/). There are 5 `Synth` classes that you can use: `Theremin`, `Oscillator`, `FilteredNoise`, and `SimpleFM`. Additionally, you can create you own custom Pixasonics `Synth` from any SignalFlow `Patch`! Each `Synth` comes with a UI, where you can tweak the parameters (or see them being modulated by `Mapper`s) in real-time.
 
-What connects the output of a `Feature` and the input parameter of a Synth is a `Mapper` object. There can be multiple `Mapper`s reading from the same `Feature` buffer and a `Synth` can have multiple `Mapper`s modulating its different parameters.
+What connects the output of a `Feature` and the input parameter of a Synth is a `Mapper` object. There can be multiple `Mapper`s reading from the same `Feature` buffer and a `Synth` can have multiple `Mapper`s modulating its different parameters. Multi-target mapping is supported, and you can also create your own custom `Mapper`.
 
 # Advanced Use Cases
 
