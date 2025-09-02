@@ -189,21 +189,23 @@ def id2contour(mask_img: np.ndarray, chosen_id: int) -> np.ndarray:
 
 
 @jit(nopython=True)
-def id2contour_cropped(mask_img: np.ndarray, chosen_id: int) -> tuple[np.ndarray, int, int]:
+def id2contour_cropped(mask_img: np.ndarray, chosen_id: int, mask_channel: int=0, mask_layer: int=0) -> tuple[np.ndarray, int, int]:
     """
-    Convert a segmentation mask to a contour mask of a given label.
+    Convert a segmentation mask to a contour mask of a given label, at a specific channel and layer in the mask.
     Returns a cropped contour mask and its position.
 
     Args:
         mask_img (np.ndarray): The segmentation mask (values represent labels).
         chosen_id (int): The label ID to create a contour for.
+        mask_channel (int): The channel of the mask to use.
+        mask_layer (int): The layer of the mask to use.
 
     Returns:
         np.ndarray: The contour mask as a binary image.
         int: The top edge of the contour.
         int: The left edge of the contour.
     """
-    mask_filtered = np.where(mask_img == chosen_id, 1, 0).astype(np.uint8)
+    mask_filtered = np.where(mask_img[..., mask_channel, mask_layer] == chosen_id, 1, 0).astype(np.uint8)
     # get the coordinates of the active pixels
     active_pixels = np.argwhere(mask_filtered)
     # get edge pixels
@@ -230,7 +232,7 @@ def id2contour_cropped(mask_img: np.ndarray, chosen_id: int) -> tuple[np.ndarray
             new_row = np.zeros_like(row)
             new_row[row_mask] = 1
             mask_cropped_contour[i] = new_row * row # filter only pixels that were active in row
-    return mask_cropped_contour, edge_top, edge_left
+    return mask_cropped_contour[..., None], edge_top, edge_left # add channel dim to mask
 
 
 def broadcast_params(*param_lists):

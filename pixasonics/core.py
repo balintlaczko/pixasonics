@@ -161,7 +161,12 @@ class App():
     @display_layer_offset.setter
     def display_layer_offset(self, value):
         self._display_layer_offset.value = value
+        self._display_layer_offset_callbacks()
+
+    def _display_layer_offset_callbacks(self):
         self.redraw_background()
+        if self.probe_with_mask and self._mask_is_loaded:
+            self.redraw_mask_contour()
 
     @property
     def image(self):
@@ -209,9 +214,9 @@ class App():
         changed = value != self._probe_with_mask.value
         self._probe_with_mask.value = value
         if changed:
-            self.probe_with_mask_callbacks()
+            self._probe_with_mask_callbacks()
 
-    def probe_with_mask_callbacks(self):
+    def _probe_with_mask_callbacks(self):
             self.selected_mask_id = self.get_mask_id_under_probe()
             self.redraw_mask_contour()
             self.draw()
@@ -232,7 +237,12 @@ class App():
         changed = value != self._selected_mask_id.value
         self._selected_mask_id.value = value
         if changed or self._unmuted_changed:
-            self.redraw_mask_contour()
+            self._selected_mask_id_callbacks()
+
+    def _selected_mask_id_callbacks(self):
+        self.redraw_mask_contour()
+        if self.unmuted:
+            self.draw()
 
     @property
     def highest_mask_id(self):
@@ -488,7 +498,7 @@ class App():
         channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
         self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self.redraw_background)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-        self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self.redraw_background)
+        self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_layer_offset_callbacks)
 
         # Bind the probe settings widgets
         # Probe sliders
@@ -504,10 +514,10 @@ class App():
         self._probe_follows_idle_mouse.bind_widget(chkbox_probe_follows_idle_mouse)
         # Probe with mask checkbox
         chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
-        self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self.probe_with_mask_callbacks)
+        self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self._probe_with_mask_callbacks)
         # Selected mask ID numbox
         numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
-        self._selected_mask_id.bind_widget(numbox_selected_mask_id, extra_callback=self.redraw_mask_contour)
+        self._selected_mask_id.bind_widget(numbox_selected_mask_id, extra_callback=self._selected_mask_id_callbacks)
 
         # Bind the audio settings widgets
         # Audio switch and master volume slider
@@ -768,12 +778,17 @@ class App():
         # make sure it is 4D
         elif len(mask_data.shape) != 4:
             mask_data = self.reshape_image_data(mask_data)
+        # try broadcasting and raise error if not compatible
+        try:
+            mask_data = np.broadcast_to(mask_data, self.bg_hires.shape)
+        except ValueError:
+            raise ValueError(f"Mask shape {mask_data.shape} is not compatible with image shape {self.bg_hires.shape}")
         self.mask = mask_data
         self._mask_is_loaded = True
         # set UI stuff
         if not self._headless:
             # run contour extraction once to JIT-compile function
-            id2contour_cropped(self.mask, 0)
+            id2contour_cropped(self.mask, 0, 0, 0)
             # enable Probe with mask checkbox
             chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
             chkbox_probe_with_mask.disabled = False
@@ -901,8 +916,9 @@ class App():
     def get_mask_id_under_probe(self):
         if not self._mask_is_loaded:
             raise ValueError("Mask is not loaded")
-        print(f"Mask ID under probe: {int(self.mask[self.probe_y, self.probe_x])}")
-        return int(self.mask[self.probe_y, self.probe_x])
+        # TODO: instead of using self.display_channel_offset, support multi-channel masks
+        mask_id = self.mask[self.probe_y, self.probe_x, self.display_channel_offset, self.display_layer_offset]
+        return int(mask_id)
 
 
     def redraw_mask_contour(self):
@@ -922,7 +938,7 @@ class App():
         if self.selected_mask_id == 0:
             return
         self.canvas[1].clear()
-        mask_filtered, y, x = id2contour_cropped(self.mask, self.selected_mask_id)
+        mask_filtered, y, x = id2contour_cropped(self.mask, self.selected_mask_id, self.display_channel_offset, self.display_layer_offset)
         self.mask_display = self.convert_image_data_for_display(
             mask_filtered,
             normalize=True,
@@ -940,7 +956,9 @@ class App():
     def get_probe_matrix(self) -> np.ndarray:
         """
         Get the probe matrix from the background image.
-        The probe matrix is a square region of the background image.
+        If probing with a mask, it returns the full image as a NumPy MaskedArray,
+        with all pixels outside the selected mask ID being masked.
+        Otherwise, it returns a rectangular slice of the background image.
         The size of the probe is determined by the probe_width and probe_height properties.
         The position of the probe is determined by the probe_x and probe_y properties.
         The probe is clamped to the image size, so that it doesn't go out of bounds.
@@ -948,10 +966,16 @@ class App():
         Returns:
             np.ndarray: The probe matrix.
         """
-        x_from = max(self.probe_x - self.probe_width//2, 0)
-        y_from = max(self.probe_y - self.probe_height//2, 0)
-        probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
-        return probe
+        if self.probe_with_mask and self._mask_is_loaded:
+            mask = (self.mask != self.selected_mask_id)
+            mask = np.broadcast_to(mask, self.bg_hires.shape)
+            probe = np.ma.masked_array(self.bg_hires, mask=mask)
+            return probe
+        else:
+            x_from = max(self.probe_x - self.probe_width//2, 0)
+            y_from = max(self.probe_y - self.probe_height//2, 0)
+            probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
+            return probe
     
 
     def render_timeline_to_array(self, timeline: List[Tuple[float, Dict]]) -> np.ndarray:
