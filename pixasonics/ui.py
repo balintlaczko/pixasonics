@@ -699,6 +699,25 @@ class ProbeSettings():
                 height='auto')
         )
         probe_with_mask_checkbox.tag = "probe_with_mask"
+        probe_same_ids_checkbox = Checkbox(
+            value=True,
+            description='Same mask IDs across layers',
+            tooltip='When enabled, the same mask IDs are selected on all layers',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_same_ids_checkbox.tag = "same_mask_ids"
+        mask_checkboxes_box = HBox(
+            [probe_with_mask_checkbox, probe_same_ids_checkbox],
+            layout=Layout(
+                justify_content='space-between',
+                align_items='flex-start',
+                width='95%'
+            )
+        )
         selected_mask_id_numbox_label = Label(value="Selected mask ID:")
         selected_mask_id_numbox = BoundedIntText(
             value=0,
@@ -708,15 +727,23 @@ class ProbeSettings():
             layout=Layout(width='20%')
         )
         selected_mask_id_numbox.tag = "selected_mask_id"
+        selected_mask_ids_text = Text(
+            value=array2str([0], keep_brackets=True),
+            placeholder='(default)',
+            description='',
+            disabled=True,
+            layout=Layout(width='65%', display='none'))
+        selected_mask_ids_text.tag = "selected_mask_ids"
         selected_mask_id_box = HBox(
-            [selected_mask_id_numbox_label, selected_mask_id_numbox],
+            [selected_mask_id_numbox_label, selected_mask_id_numbox, selected_mask_ids_text],
             layout=Layout(
                 justify_content='flex-start',
                 width='100%'
             )
         )
+        selected_mask_id_box.tag = "selected_mask_id_box"
         probe_mask_settings_box = VBox(
-            [probe_with_mask_checkbox, selected_mask_id_box],
+            [mask_checkboxes_box, selected_mask_id_box],
             layout=Layout(
                 justify_content='space-around',
                 align_items='flex-start',

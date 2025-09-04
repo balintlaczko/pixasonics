@@ -1,5 +1,5 @@
 from .features import Feature
-from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, id2contour_cropped
+from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, ids2mask_cropped, array2str
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Synth, Envelope
 from ipycanvas import hold_canvas, MultiCanvas
@@ -83,7 +83,8 @@ class App():
         self._probe_height_on_last_draw = 50
         self._probe_follows_idle_mouse = Model(False)
         self._probe_with_mask = Model(False)
-        self._selected_mask_id = Model(1)
+        self._same_mask_ids_across_layers = Model(True)
+        self._selected_mask_ids = Model(np.zeros((1, 1)))
         self._interaction_mode = Model("Hold")
         self._last_mouse_down_time = 0
         self._master_volume = Model(0)
@@ -101,6 +102,8 @@ class App():
         self._display_layer_offset = Model(0)
         self._image_is_loaded = False
         self._mask_is_loaded = False
+        self._mask_channels = -1
+        self._mask_layers = -1
         self._highest_mask_id = 0
         self._headless = headless
         self._draw_lock = False # True disables self.draw()
@@ -152,7 +155,7 @@ class App():
     @display_channel_offset.setter
     def display_channel_offset(self, value):
         self._display_channel_offset.value = value
-        self.redraw_background()
+        self._display_channel_or_layer_offset_callbacks()
 
     @property
     def display_layer_offset(self):
@@ -161,12 +164,12 @@ class App():
     @display_layer_offset.setter
     def display_layer_offset(self, value):
         self._display_layer_offset.value = value
-        self._display_layer_offset_callbacks()
+        self._display_channel_or_layer_offset_callbacks()
 
-    def _display_layer_offset_callbacks(self):
+    def _display_channel_or_layer_offset_callbacks(self):
         self.redraw_background()
         if self.probe_with_mask and self._mask_is_loaded:
-            self.redraw_mask_contour()
+            self.redraw_mask_display()
 
     @property
     def image(self):
@@ -217,36 +220,75 @@ class App():
             self._probe_with_mask_callbacks()
 
     def _probe_with_mask_callbacks(self):
-            self.selected_mask_id = self.get_mask_id_under_probe()
-            self.redraw_mask_contour()
+            self.selected_mask_ids = self.get_mask_ids_under_probe()
+            self.redraw_mask_display()
             self.draw()
             # enable/disable selected mask ID numbox on UI
             numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
             numbox_selected_mask_id.disabled = not self.probe_with_mask
+            # enable/disable same IDs checkbox on UI
+            checkbox_same_mask_ids = find_widget_by_tag(self.ui, "same_mask_ids")
+            checkbox_same_mask_ids.disabled = not self.probe_with_mask
 
     @property
-    def selected_mask_id(self):
-        return self._selected_mask_id.value
+    def same_mask_ids_across_layers(self):
+        return self._same_mask_ids_across_layers.value
 
-    @selected_mask_id.setter
-    def selected_mask_id(self, value):
-        # clamp to valid range
-        value = int(np.clip(value, 0, self.highest_mask_id))
-        # repeat last value if 0
-        value = value if value != 0 else self._selected_mask_id.value
-        changed = value != self._selected_mask_id.value
-        self._selected_mask_id.value = value
+    @same_mask_ids_across_layers.setter
+    def same_mask_ids_across_layers(self, value):
+        self._same_mask_ids_across_layers.value = value
+
+    def _same_mask_ids_across_layers_callbacks(self):
+        self.selected_mask_ids = self.get_mask_ids_under_probe()
+        self.update_mask_ids_display()
+        self.redraw_mask_display()
+        if self.unmuted:
+            self.draw()
+
+    @property
+    def selected_mask_ids(self):
+        return self._selected_mask_ids.value
+
+    @selected_mask_ids.setter
+    def selected_mask_ids(self, value):
+        # if number convert to a 2d array (channels, layers)
+        if np.isscalar(value):
+            value = np.array([[value]])
+        elif type(value) == np.array:
+            # if array make sure it is 2 channels
+            if np.ndim(value) < 2:
+                value = np.broadcast_to(value, (self.mask_channels, self.mask_layers))
+            elif np.ndim(value) > 2:
+                raise ValueError(f"Invalid array shape. Expected up-to 2D array, got {np.ndim(value)}D")
+        # broadcast to mask shape
+        value = np.broadcast_to(value, (self.mask_channels, self.mask_layers))
+        # clip to valid range
+        value = np.clip(value, 0, self.highest_mask_id)
+        # repeat the last value if all zeros
+        value = value if value.sum() != 0 else self._selected_mask_ids.value
+        changed = not np.array_equal(value, self._selected_mask_ids.value)
+        self._selected_mask_ids.value = value
         if changed or self._unmuted_changed:
-            self._selected_mask_id_callbacks()
+            self._selected_mask_ids_callbacks()
 
-    def _selected_mask_id_callbacks(self):
-        self.redraw_mask_contour()
+    def _selected_mask_ids_callbacks(self):
+        if not self._headless:
+            self.redraw_mask_display()
+            self.update_mask_ids_display()
         if self.unmuted:
             self.draw()
 
     @property
     def highest_mask_id(self):
         return self._highest_mask_id
+    
+    @property
+    def mask_channels(self):
+        return self._mask_channels
+
+    @property
+    def mask_layers(self):
+        return self._mask_layers
 
     def clamp_probe_x(self, value):
         # clamp to the image size and also no less than half of the probe sides, so that the mouse is always in the middle of the probe
@@ -266,7 +308,7 @@ class App():
     def probe_x(self, value):
         self._probe_x = self.clamp_probe_x(value)
         if self.probe_with_mask:
-            self.selected_mask_id = self.get_mask_id_under_probe()
+            self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.draw()
     
@@ -278,7 +320,7 @@ class App():
     def probe_y(self, value):
         self._probe_y = self.clamp_probe_y(value)
         if self.probe_with_mask:
-            self.selected_mask_id = self.get_mask_id_under_probe()
+            self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.draw()
 
@@ -287,7 +329,7 @@ class App():
         self._probe_x = self.clamp_probe_x(self.probe_x)
         self._probe_y = self.clamp_probe_y(self.probe_y)
         if self.probe_with_mask:
-            self.selected_mask_id = self.get_mask_id_under_probe()
+            self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.draw()
 
@@ -496,9 +538,9 @@ class App():
         chkbox_normalize_display_global = find_widget_by_tag(self.ui, "normalize_display_global")
         self._normalize_display_global.bind_widget(chkbox_normalize_display_global, extra_callback=self.redraw_background)
         channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
-        self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self.redraw_background)
+        self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
-        self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_layer_offset_callbacks)
+        self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
 
         # Bind the probe settings widgets
         # Probe sliders
@@ -515,9 +557,18 @@ class App():
         # Probe with mask checkbox
         chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
         self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self._probe_with_mask_callbacks)
+        # Same mask IDs across layers checkbox
+        chkbox_same_mask_ids = find_widget_by_tag(self.ui, "same_mask_ids")
+        self._same_mask_ids_across_layers.bind_widget(chkbox_same_mask_ids, extra_callback=self._same_mask_ids_across_layers_callbacks)
         # Selected mask ID numbox
+        # need to do it manually because it is not a constant two-way model
         numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
-        self._selected_mask_id.bind_widget(numbox_selected_mask_id, extra_callback=self._selected_mask_id_callbacks)
+        def _update_selected_mask_id_from_numbox(change, extra_callback=None):
+            if change['name'] == 'value':
+                self.selected_mask_ids = change['new'] # it will handle the scalar
+            if extra_callback is not None:
+                extra_callback()
+        numbox_selected_mask_id.observe(lambda x: _update_selected_mask_id_from_numbox(x, extra_callback=self._selected_mask_ids_callbacks), names='value')
 
         # Bind the audio settings widgets
         # Audio switch and master volume slider
@@ -780,15 +831,15 @@ class App():
             mask_data = self.reshape_image_data(mask_data)
         # try broadcasting and raise error if not compatible
         try:
-            mask_data = np.broadcast_to(mask_data, self.bg_hires.shape)
+            np.broadcast_to(mask_data, self.bg_hires.shape)
         except ValueError:
             raise ValueError(f"Mask shape {mask_data.shape} is not compatible with image shape {self.bg_hires.shape}")
         self.mask = mask_data
         self._mask_is_loaded = True
+        self._mask_channels = self.mask.shape[2]
+        self._mask_layers = self.mask.shape[3]
         # set UI stuff
         if not self._headless:
-            # run contour extraction once to JIT-compile function
-            id2contour_cropped(self.mask, 0, 0, 0)
             # enable Probe with mask checkbox
             chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
             chkbox_probe_with_mask.disabled = False
@@ -796,6 +847,11 @@ class App():
             self._highest_mask_id = int(self.mask.max())
             numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
             numbox_selected_mask_id.max = self._highest_mask_id
+            # render either a numbox of a text field
+            self.update_mask_ids_display()
+            # redraw mask display if probing with mask
+            if self.probe_with_mask:
+                self.redraw_mask_display()
 
 
     def resize_image_data(self, img_data: np.ndarray, use_nearest: bool=False) -> np.ndarray:
@@ -854,7 +910,8 @@ class App():
             global_normalize=False,
             channel_offset=0,
             layer_offset=0,
-            add_transparency=False
+            add_transparency=False,
+            opacity: float = 0.5
             ):
         img = self.rescale_image_data_for_display(
             img_data, 
@@ -872,9 +929,9 @@ class App():
         # if more than 3 channels, slice 3 channels according to the channel offset
         elif img.shape[2] > 3:
             img = img[:, :, channel_offset:channel_offset+3]
-        # if adding transparency, copy the first channel into the alpha
+        # if adding transparency, copy the first channel into the alpha and multiply it with the opacity value
         if add_transparency:
-            img = np.concatenate([img, img[..., :1]], axis=2)
+            img = np.concatenate([img, (img[..., :1] * opacity)], axis=2)
         return img
 
 
@@ -911,17 +968,19 @@ class App():
             layer_offset=self.display_layer_offset
             )
         self.canvas[0].put_image_data(self.bg_display, 0, 0)
+    
 
-
-    def get_mask_id_under_probe(self):
+    def get_mask_ids_under_probe(self):
         if not self._mask_is_loaded:
             raise ValueError("Mask is not loaded")
-        # TODO: instead of using self.display_channel_offset, support multi-channel masks
-        mask_id = self.mask[self.probe_y, self.probe_x, self.display_channel_offset, self.display_layer_offset]
-        return int(mask_id)
+        if not self.same_mask_ids_across_layers:
+            mask_ids = self.mask[self.probe_y, self.probe_x, :, :]
+        else:
+            mask_ids = self.mask[self.probe_y, self.probe_x, :, self.display_layer_offset][..., None]
+        return mask_ids
 
 
-    def redraw_mask_contour(self):
+    def redraw_mask_display(self):
         if self._headless:
             return
         if self.nrt:
@@ -934,24 +993,28 @@ class App():
         if not self.probe_with_mask:
             self.canvas[1].clear()
             return
-        # escape if no mask is selected
-        if self.selected_mask_id == 0:
-            return
+        # # escape if no mask is selected
+        # if self.selected_mask_ids.sum() == 0:
+        #     return
         self.canvas[1].clear()
-        mask_filtered, y, x = id2contour_cropped(self.mask, self.selected_mask_id, self.display_channel_offset, self.display_layer_offset)
-        self.mask_display = self.convert_image_data_for_display(
-            mask_filtered,
-            normalize=True,
-            global_normalize=False,
-            channel_offset=self.display_channel_offset,
-            layer_offset=self.display_layer_offset,
-            add_transparency=True
-        )
-        self.mask_display[..., 2] = 0
+        # also applies channel/layer offsets to displayed masks and chosen IDs
+        mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, self.display_channel_offset, self.display_layer_offset)
+        # don't draw if no mask is found
+        if mask_filtered is None:
+            return
+        opacity = 0.4
+        self.mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
+        self.mask_display[..., 2] = 0 # turn off blue
+        self.mask_display[..., 3] = opacity * self.mask_display[..., 0] # set alpha channel
         if self.unmuted:
             self.mask_display[..., 1] = 0 # turn off green (becomes red)
         self.canvas[1].put_image_data(self.mask_display, x, y)
-
+        # also draw a rectangle around the mask
+        self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
+        self.canvas[1].stroke_rect(
+            int(x), 
+            int(y), 
+            *mask_filtered.shape[1::-1]) # width, height
 
     def get_probe_matrix(self) -> np.ndarray:
         """
@@ -967,7 +1030,7 @@ class App():
             np.ndarray: The probe matrix.
         """
         if self.probe_with_mask and self._mask_is_loaded:
-            mask = (self.mask != self.selected_mask_id)
+            mask = (self.mask != self.selected_mask_ids) | (self.mask == 0)
             mask = np.broadcast_to(mask, self.bg_hires.shape)
             probe = np.ma.masked_array(self.bg_hires, mask=mask)
             return probe
@@ -1241,7 +1304,7 @@ class App():
             # only draw when any of the probe params or unmuted has changed since the last draw
             if self._probe_changed or self._unmuted_changed:
                 if self.probe_with_mask:
-                    self.selected_mask_id = self.get_mask_id_under_probe()
+                    self.selected_mask_ids = self.get_mask_ids_under_probe()
                 self.draw()
 
 
@@ -1292,6 +1355,17 @@ class App():
 
     def set_master_volume(self):
         self.master_slider_db.set_value(self.master_volume)
+
+    def update_mask_ids_display(self):
+        condition = (self._mask_channels == 1 and (self._mask_layers == 1 or self.same_mask_ids_across_layers))
+        numbox = find_widget_by_tag(self.ui, "selected_mask_id")
+        numbox.layout.display = "flex" if condition else "none"
+        text = find_widget_by_tag(self.ui, "selected_mask_ids")
+        text.layout.display = "none" if condition else "flex"
+        if condition:
+            numbox.value = self.selected_mask_ids[0, 0]
+        else:
+            text.value = array2str(self.selected_mask_ids, keep_brackets=True)
 
 
 class Mapper():
