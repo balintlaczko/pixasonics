@@ -976,7 +976,7 @@ class App():
         if not self.same_mask_ids_across_layers:
             mask_ids = self.mask[self.probe_y, self.probe_x, :, :]
         else:
-            mask_ids = self.mask[self.probe_y, self.probe_x, :, self.display_layer_offset][..., None]
+            mask_ids = self.mask[self.probe_y, self.probe_x, :, min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None]
         return mask_ids
 
 

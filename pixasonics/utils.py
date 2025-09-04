@@ -212,8 +212,8 @@ def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, channel_offse
     bool_mask = (mask_img == chosen_ids)
     # multiply with the boolean mask_img to remove 0 labels
     bool_mask *= mask_img.astype(bool)
-    # apply layer offset, remove layer dimension
-    mask_filtered = bool_mask[..., layer_offset]
+    # apply layer offset (if multilayer), remove layer dimension
+    mask_filtered = bool_mask[..., min(layer_offset, bool_mask.shape[-1] - 1)]
     # apply channel offset if necessary
     if mask_filtered.shape[-1] > 3:
         mask_filtered = mask_filtered[..., channel_offset:min(channel_offset+3, mask_filtered.shape[-1])]
