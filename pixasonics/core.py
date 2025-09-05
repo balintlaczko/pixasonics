@@ -851,6 +851,7 @@ class App():
             self.update_mask_ids_display()
             # redraw mask display if probing with mask
             if self.probe_with_mask:
+                self.selected_mask_ids = self.get_mask_ids_under_probe()
                 self.redraw_mask_display()
 
 
