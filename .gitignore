@@ -9,6 +9,7 @@
 peaks/
 *.wav
 analyze_workshop_feedback.ipynb
+dev.ipynb
 *.maxpat
 
 # Byte-compiled / optimized / DLL files
