@@ -101,6 +101,7 @@ class App():
         self._normalize_display_global = Model(False)
         self._display_channel_offset = Model(0)
         self._display_layer_offset = Model(0)
+        self._filter_probe_by_layer_offset = Model(False)
         self._image_is_loaded = False
         self._mask_is_loaded = False
         self._mask_channels = -1
@@ -168,9 +169,22 @@ class App():
         self._display_channel_or_layer_offset_callbacks()
 
     def _display_channel_or_layer_offset_callbacks(self):
+        if self.filter_probe_by_layer_offset:
+            self.compute_event.set()
         self.redraw_background()
         if self.probe_with_mask and self._mask_is_loaded:
             self.redraw_mask_display()
+
+    @property
+    def filter_probe_by_layer_offset(self):
+        return self._filter_probe_by_layer_offset.value
+
+    @filter_probe_by_layer_offset.setter
+    def filter_probe_by_layer_offset(self, value):
+        changed = value != self._filter_probe_by_layer_offset.value
+        self._filter_probe_by_layer_offset.value = value
+        if changed:
+            self.compute_event.set()
 
     @property
     def image(self):
@@ -542,6 +556,8 @@ class App():
         self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
         self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
+        filter_probe_by_layer_offset = find_widget_by_tag(self.ui, "filter_probe_by_layer_offset")
+        self._filter_probe_by_layer_offset.bind_widget(filter_probe_by_layer_offset, extra_callback=self.compute_event.set)
 
         # Bind the probe settings widgets
         # Probe sliders
@@ -1023,8 +1039,6 @@ class App():
         # if self.selected_mask_ids.sum() == 0:
         #     return
         self.canvas[1].clear()
-        # TODO: check if only unmuted state changed, then only redraw the mask with different color
-        # TODO: optimize by caching the filtered mask for the current selected IDs and offsets
         # # also applies channel/layer offsets to displayed masks and chosen IDs
         # mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, self.display_channel_offset, self.display_layer_offset)
         # # don't draw if no mask is found
@@ -1091,12 +1105,14 @@ class App():
             mask = (self.mask != self.selected_mask_ids) | (self.mask == 0)
             mask = np.broadcast_to(mask, self.bg_hires.shape)
             probe = np.ma.masked_array(self.bg_hires, mask=mask)
-            return probe
         else:
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
             probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
-            return probe
+        # apply filter_by_layer_offset if enabled
+        if self.filter_probe_by_layer_offset and probe.shape[3] > 1:
+            probe = probe[:, :, :, min(self.display_layer_offset, probe.shape[3] - 1)][..., None]
+        return probe
     
 
     def render_timeline_to_array(self, timeline: List[Tuple[float, Dict]]) -> np.ndarray:

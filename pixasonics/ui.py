@@ -687,6 +687,17 @@ class ProbeSettings():
                 height='auto')
         )
         probe_follows_idle_mouse_checkbox.tag = "probe_follows_idle_mouse"
+        
+        filter_probe_by_layer_offset = Checkbox(
+            value=False,
+            description='Filter Probe by Layer Offset',
+            tooltip='When enabled, only the data from the current display layer will be used for probing',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        filter_probe_by_layer_offset.tag = "filter_probe_by_layer_offset"
 
         probe_with_mask_checkbox = Checkbox(
             value=False,
@@ -791,7 +802,7 @@ class ProbeSettings():
                 flex_flow='row'))
 
         self.box = Box(
-            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, probe_mask_settings_box, probe_xy_box], 
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, filter_probe_by_layer_offset, probe_mask_settings_box, probe_xy_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
@@ -956,9 +967,9 @@ class ImageSettings():
                 description_width='100px')
         )
         layer_offset.tag = "layer_offset"
-        
+
         self.box = VBox(
-            [normalize_box, channel_offset, layer_offset], 
+            [normalize_box, channel_offset, layer_offset],
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
