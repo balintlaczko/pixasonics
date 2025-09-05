@@ -2,7 +2,7 @@ from .features import Feature
 from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, ids2mask_cropped, array2str
 from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Synth, Envelope
-from ipycanvas import hold_canvas, MultiCanvas
+from ipycanvas import hold_canvas, MultiCanvas, Canvas
 from IPython.display import display
 import time
 import numpy as np
@@ -10,6 +10,7 @@ import signalflow as sf
 from PIL import Image
 import threading
 from typing import List, Tuple, Dict, Optional, Union
+from functools import lru_cache
 
 class AppRegistry:
     _instance = None
@@ -766,6 +767,8 @@ class App():
         #         global_normalize=self.normalize_display_global)
         
         self._image_is_loaded = True
+        # clear cache
+        self._get_rendered_image_display.cache_clear()
 
         if not self._headless:
             # Set layer offset to 0, enable the slider, and set the max value
@@ -838,6 +841,8 @@ class App():
         self._mask_is_loaded = True
         self._mask_channels = self.mask.shape[2]
         self._mask_layers = self.mask.shape[3]
+        # clear cache
+        self._get_rendered_mask_display.cache_clear()
         # set UI stuff
         if not self._headless:
             # enable Probe with mask checkbox
@@ -961,15 +966,35 @@ class App():
             return
         if not self._image_is_loaded:
             return
-        self.bg_display = self.convert_image_data_for_display(
+        # self.bg_display = self.convert_image_data_for_display(
+        #     self.bg_hires, 
+        #     normalize=self._normalize_display.value, 
+        #     global_normalize=self._normalize_display_global.value,
+        #     channel_offset=self.display_channel_offset,
+        #     layer_offset=self.display_layer_offset
+        #     )
+        # self.canvas[0].put_image_data(self.bg_display, 0, 0)
+        self.bg_display, canvas = self._get_rendered_image_display(
+            self._normalize_display.value,
+            self._normalize_display_global.value,
+            self.display_channel_offset,
+            self.display_layer_offset
+        )
+        self.canvas[0].draw_image(canvas, 0, 0)
+
+    @lru_cache(maxsize=512)
+    def _get_rendered_image_display(self, normalize, global_normalize, channel_offset, layer_offset):
+        bg_display = self.convert_image_data_for_display(
             self.bg_hires, 
-            normalize=self._normalize_display.value, 
-            global_normalize=self._normalize_display_global.value,
-            channel_offset=self.display_channel_offset,
-            layer_offset=self.display_layer_offset
+            normalize=normalize, 
+            global_normalize=global_normalize,
+            channel_offset=channel_offset,
+            layer_offset=layer_offset
             )
-        self.canvas[0].put_image_data(self.bg_display, 0, 0)
-    
+        canvas = Canvas(width=self.image_size[1], height=self.image_size[0])
+        canvas.put_image_data(bg_display, 0, 0)
+        return bg_display, canvas
+
 
     def get_mask_ids_under_probe(self):
         if not self._mask_is_loaded:
@@ -998,24 +1023,56 @@ class App():
         # if self.selected_mask_ids.sum() == 0:
         #     return
         self.canvas[1].clear()
-        # also applies channel/layer offsets to displayed masks and chosen IDs
-        mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, self.display_channel_offset, self.display_layer_offset)
-        # don't draw if no mask is found
+        # TODO: check if only unmuted state changed, then only redraw the mask with different color
+        # TODO: optimize by caching the filtered mask for the current selected IDs and offsets
+        # # also applies channel/layer offsets to displayed masks and chosen IDs
+        # mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, self.display_channel_offset, self.display_layer_offset)
+        # # don't draw if no mask is found
+        # if mask_filtered is None:
+        #     return
+        # opacity = 0.4
+        # self.mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
+        # self.mask_display[..., 2] = 0 # turn off blue
+        # self.mask_display[..., 3] = opacity * self.mask_display[..., 0] # set alpha channel
+        # if self.unmuted:
+        #     self.mask_display[..., 1] = 0 # turn off green (becomes red)
+        # self.canvas[1].put_image_data(self.mask_display, x, y)
+        # # also draw a rectangle around the mask
+        # self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
+        # self.canvas[1].stroke_rect(
+        #     int(x), 
+        #     int(y), 
+        #     *mask_filtered.shape[1::-1]) # width, height
+        _, canvas = self._get_rendered_mask_display(
+            self.selected_mask_ids.tobytes(),
+            self.unmuted,
+            self.display_channel_offset,
+            self.display_layer_offset
+        )
+        if canvas is not None:
+            self.canvas[1].draw_image(canvas, 0, 0)
+
+
+    @lru_cache(maxsize=4096)
+    def _get_rendered_mask_display(self, mask_ids, unmuted, channel_offset, layer_offset):
+        mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, channel_offset, layer_offset)
         if mask_filtered is None:
-            return
+            return None, None
         opacity = 0.4
-        self.mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
-        self.mask_display[..., 2] = 0 # turn off blue
-        self.mask_display[..., 3] = opacity * self.mask_display[..., 0] # set alpha channel
-        if self.unmuted:
-            self.mask_display[..., 1] = 0 # turn off green (becomes red)
-        self.canvas[1].put_image_data(self.mask_display, x, y)
-        # also draw a rectangle around the mask
-        self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
-        self.canvas[1].stroke_rect(
+        mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
+        mask_display[..., 2] = 0 # turn off blue
+        mask_display[..., 3] = opacity * mask_display[..., 0] # set alpha channel
+        if unmuted:
+            mask_display[..., 1] = 0 # turn off green (becomes red)
+        canvas = Canvas(width=self.image_size[1], height=self.image_size[0])
+        canvas.put_image_data(mask_display, x, y)
+        canvas.stroke_style = 'red' if unmuted else 'yellow'
+        canvas.stroke_rect(
             int(x), 
             int(y), 
             *mask_filtered.shape[1::-1]) # width, height
+        return mask_display, canvas
+
 
     def get_probe_matrix(self) -> np.ndarray:
         """
