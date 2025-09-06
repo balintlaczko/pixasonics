@@ -688,6 +688,16 @@ class ProbeSettings():
         )
         probe_follows_idle_mouse_checkbox.tag = "probe_follows_idle_mouse"
         
+        filter_probe_by_channel_offset = Checkbox(
+            value=False,
+            description='Filter Probe by Channel Offset',
+            tooltip='When enabled, only the data from the current display channel will be used for probing',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        filter_probe_by_channel_offset.tag = "filter_probe_by_channel_offset"
         filter_probe_by_layer_offset = Checkbox(
             value=False,
             description='Filter Probe by Layer Offset',
@@ -698,6 +708,15 @@ class ProbeSettings():
                 height='auto')
         )
         filter_probe_by_layer_offset.tag = "filter_probe_by_layer_offset"
+        filter_offsets_box = VBox(
+            [filter_probe_by_channel_offset, filter_probe_by_layer_offset],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                width='100%',
+            )
+        )
 
         probe_with_mask_checkbox = Checkbox(
             value=False,
@@ -760,7 +779,6 @@ class ProbeSettings():
                 align_items='flex-start',
                 flex_flow='column',
                 width='100%',
-                # padding='5px'
             )
         )
 
@@ -768,41 +786,41 @@ class ProbeSettings():
         probe_x_value = IntText(
             value=0, 
             disabled=True,
-            layout=Layout(width='90%')
+            layout=Layout(width='50%')
             )
         probe_x_value.tag = "probe_x"
-        probe_x_box = VBox(
+        probe_x_box = HBox(
             [probe_x_label, probe_x_value],
             layout=Layout(
-                justify_content='space-around', 
-                align_items='flex-start', 
-                flex_flow='column',
-                padding='5px'))
+                justify_content='flex-start', 
+                align_items='center', 
+                ))
         
         probe_y_label = Label(value="Probe Y:")
         probe_y_value = IntText(
             value=0, 
             disabled=True,
-            layout=Layout(width='90%')
+            layout=Layout(width='50%')
             )
         probe_y_value.tag = "probe_y"
-        probe_y_box = VBox(
+        probe_y_box = HBox(
             [probe_y_label, probe_y_value],
             layout=Layout(
-                justify_content='space-around', 
-                align_items='flex-start', 
-                flex_flow='column',
-                padding='5px'))
+                justify_content='flex-end', 
+                align_items='center', 
+                ))
         
         probe_xy_box = HBox(
             [probe_x_box, probe_y_box],
             layout=Layout(
-                justify_content='space-around', 
+                justify_content='flex-start', 
                 align_items='flex-start', 
-                flex_flow='row'))
+                width='100%',
+                padding='5px 0px 0px 0px',
+                ))
 
         self.box = Box(
-            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, filter_probe_by_layer_offset, probe_mask_settings_box, probe_xy_box], 
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, filter_offsets_box, probe_mask_settings_box, probe_xy_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
@@ -939,7 +957,26 @@ class ImageSettings():
                 justify_content='space-around', 
                 align_items='flex-start', 
                 padding='5px'))
-        
+
+        maximum_displayed_channels_label = Label(value="Maximum displayed channels:")
+        maximum_displayed_channels_numbox = BoundedIntText(
+            value=3,
+            min=1,
+            max=3,
+            disabled=False,
+            layout=Layout(width='12%')
+        )
+        maximum_displayed_channels_numbox.tag = "maximum_displayed_channels"
+        maximum_displayed_channels_box = HBox(
+            [maximum_displayed_channels_label, maximum_displayed_channels_numbox],
+            layout=Layout(
+                justify_content='flex-start',
+                width='90%',
+                padding='14px'
+            )
+        )
+        maximum_displayed_channels_box.tag = "maximum_displayed_channels_box"
+
         channel_offset = IntSlider(
             value=0,
             min=0,
@@ -969,7 +1006,7 @@ class ImageSettings():
         layer_offset.tag = "layer_offset"
 
         self.box = VBox(
-            [normalize_box, channel_offset, layer_offset],
+            [normalize_box, maximum_displayed_channels_box, channel_offset, layer_offset],
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 

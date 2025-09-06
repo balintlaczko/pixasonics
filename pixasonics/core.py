@@ -99,8 +99,10 @@ class App():
         self._sample_rate = 48000 # sample_rate
         self._normalize_display = Model(False)
         self._normalize_display_global = Model(False)
+        self._maximum_displayed_channels = Model(3)
         self._display_channel_offset = Model(0)
         self._display_layer_offset = Model(0)
+        self._filter_probe_by_channel_offset = Model(False)
         self._filter_probe_by_layer_offset = Model(False)
         self._image_is_loaded = False
         self._mask_is_loaded = False
@@ -151,11 +153,24 @@ class App():
         self.redraw_background()
 
     @property
+    def maximum_displayed_channels(self):
+        return self._maximum_displayed_channels.value
+    
+    @maximum_displayed_channels.setter
+    def maximum_displayed_channels(self, value):
+        value = int(np.clip(value, 1, 3))
+        changed = value != self._maximum_displayed_channels.value
+        self._maximum_displayed_channels.value = value
+        if changed:
+            self.redraw_background()
+
+    @property
     def display_channel_offset(self):
         return self._display_channel_offset.value
     
     @display_channel_offset.setter
     def display_channel_offset(self, value):
+        value = int(np.clip(value, 0, max(0, self.bg_hires.shape[2]-1)))
         self._display_channel_offset.value = value
         self._display_channel_or_layer_offset_callbacks()
 
@@ -165,6 +180,7 @@ class App():
     
     @display_layer_offset.setter
     def display_layer_offset(self, value):
+        value = int(np.clip(value, 0, max(0, self.bg_hires.shape[3]-1)))
         self._display_layer_offset.value = value
         self._display_channel_or_layer_offset_callbacks()
 
@@ -174,6 +190,17 @@ class App():
         self.redraw_background()
         if self.probe_with_mask and self._mask_is_loaded:
             self.redraw_mask_display()
+
+    @property
+    def filter_probe_by_channel_offset(self):
+        return self._filter_probe_by_channel_offset.value
+    
+    @filter_probe_by_channel_offset.setter
+    def filter_probe_by_channel_offset(self, value):
+        changed = value != self._filter_probe_by_channel_offset.value
+        self._filter_probe_by_channel_offset.value = value
+        if changed:
+            self.compute_event.set()
 
     @property
     def filter_probe_by_layer_offset(self):
@@ -552,10 +579,14 @@ class App():
         self._normalize_display.bind_widget(chkbox_normalize_display, extra_callback=self.redraw_background)
         chkbox_normalize_display_global = find_widget_by_tag(self.ui, "normalize_display_global")
         self._normalize_display_global.bind_widget(chkbox_normalize_display_global, extra_callback=self.redraw_background)
+        maximum_displayed_channels_numbox = find_widget_by_tag(self.ui, "maximum_displayed_channels")
+        self._maximum_displayed_channels.bind_widget(maximum_displayed_channels_numbox, extra_callback=self.redraw_background)
         channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
         self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
         self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
+        filter_probe_by_channel_offset = find_widget_by_tag(self.ui, "filter_probe_by_channel_offset")
+        self._filter_probe_by_channel_offset.bind_widget(filter_probe_by_channel_offset, extra_callback=self.compute_event.set)
         filter_probe_by_layer_offset = find_widget_by_tag(self.ui, "filter_probe_by_layer_offset")
         self._filter_probe_by_layer_offset.bind_widget(filter_probe_by_layer_offset, extra_callback=self.compute_event.set)
 
@@ -776,11 +807,6 @@ class App():
         elif len(img_data.shape) != 4:
             img_data = self.reshape_image_data(img_data)
         self.bg_hires = img_data
-        # if not self._headless:
-        #     self.bg_display = self.convert_image_data_for_display(
-        #         self.bg_hires, 
-        #         normalize=self.normalize_display, 
-        #         global_normalize=self.normalize_display_global)
         
         self._image_is_loaded = True
         # clear cache
@@ -788,26 +814,22 @@ class App():
 
         if not self._headless:
             # Set layer offset to 0, enable the slider, and set the max value
+            layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
+            self._display_layer_offset.value = 0
             if len(self.bg_hires.shape) == 4 and self.bg_hires.shape[3] > 1:
-                self._display_layer_offset.value = 0
-                layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
                 layer_offset_slider.disabled = False
                 layer_offset_slider.max = self.bg_hires.shape[-1] - 1
             else:
-                self._display_layer_offset.value = 0
-                layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
                 layer_offset_slider.disabled = True
                 layer_offset_slider.max = 0
 
             # Set the channel offset to 0, enable the slider, and set the max value
-            if self.bg_hires.shape[2] > 3:
-                self._display_channel_offset.value = 0
-                channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+            channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
+            self._display_channel_offset.value = 0
+            if self.bg_hires.shape[2] > 1:
                 channel_offset_slider.disabled = False
-                channel_offset_slider.max = self.bg_hires.shape[2] - 3
+                channel_offset_slider.max = self.bg_hires.shape[2] - 1
             else:
-                self._display_channel_offset.value = 0
-                channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
                 channel_offset_slider.disabled = True
                 channel_offset_slider.max = 0
 
@@ -930,6 +952,7 @@ class App():
             img_data, 
             normalize=False, 
             global_normalize=False,
+            maximum_displayed_channels=3,
             channel_offset=0,
             layer_offset=0,
             add_transparency=False,
@@ -942,15 +965,18 @@ class App():
         # if 4D, slice the layer according to the layer offset
         if len(img.shape) == 4:
             img = img[:, :, :, layer_offset]
-        # if single channel, repeat to 3 channels
+        # if more than 1ch apply layer offset
+        if img.shape[2] > 1:
+            img = img[:, :, channel_offset : min(channel_offset + maximum_displayed_channels, img.shape[2])]
+        # if (result is) single channel, repeat to 3 channels
         if img.shape[2] == 1:
             img = np.repeat(img, 3, axis=2)
         # if two channels, add a third empty channel
         elif img.shape[2] == 2:
             img = np.concatenate([img, np.zeros(img.shape[:2] + (1,), dtype=img.dtype)], axis=2)
-        # if more than 3 channels, slice 3 channels according to the channel offset
-        elif img.shape[2] > 3:
-            img = img[:, :, channel_offset:channel_offset+3]
+        # # if more than 3 channels, slice 3 channels according to the channel offset
+        # elif img.shape[2] > 3:
+        #     img = img[:, :, channel_offset:channel_offset+3]
         # if adding transparency, copy the first channel into the alpha and multiply it with the opacity value
         if add_transparency:
             img = np.concatenate([img, (img[..., :1] * opacity)], axis=2)
@@ -982,28 +1008,22 @@ class App():
             return
         if not self._image_is_loaded:
             return
-        # self.bg_display = self.convert_image_data_for_display(
-        #     self.bg_hires, 
-        #     normalize=self._normalize_display.value, 
-        #     global_normalize=self._normalize_display_global.value,
-        #     channel_offset=self.display_channel_offset,
-        #     layer_offset=self.display_layer_offset
-        #     )
-        # self.canvas[0].put_image_data(self.bg_display, 0, 0)
         self.bg_display, canvas = self._get_rendered_image_display(
             self._normalize_display.value,
             self._normalize_display_global.value,
+            self.maximum_displayed_channels,
             self.display_channel_offset,
             self.display_layer_offset
         )
         self.canvas[0].draw_image(canvas, 0, 0)
 
     @lru_cache(maxsize=512)
-    def _get_rendered_image_display(self, normalize, global_normalize, channel_offset, layer_offset):
+    def _get_rendered_image_display(self, normalize, global_normalize, maximum_displayed_channels, channel_offset, layer_offset):
         bg_display = self.convert_image_data_for_display(
             self.bg_hires, 
             normalize=normalize, 
             global_normalize=global_normalize,
+            maximum_displayed_channels=maximum_displayed_channels,
             channel_offset=channel_offset,
             layer_offset=layer_offset
             )
@@ -1039,27 +1059,10 @@ class App():
         # if self.selected_mask_ids.sum() == 0:
         #     return
         self.canvas[1].clear()
-        # # also applies channel/layer offsets to displayed masks and chosen IDs
-        # mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, self.display_channel_offset, self.display_layer_offset)
-        # # don't draw if no mask is found
-        # if mask_filtered is None:
-        #     return
-        # opacity = 0.4
-        # self.mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
-        # self.mask_display[..., 2] = 0 # turn off blue
-        # self.mask_display[..., 3] = opacity * self.mask_display[..., 0] # set alpha channel
-        # if self.unmuted:
-        #     self.mask_display[..., 1] = 0 # turn off green (becomes red)
-        # self.canvas[1].put_image_data(self.mask_display, x, y)
-        # # also draw a rectangle around the mask
-        # self.canvas[1].stroke_style = 'red' if self.unmuted else 'yellow'
-        # self.canvas[1].stroke_rect(
-        #     int(x), 
-        #     int(y), 
-        #     *mask_filtered.shape[1::-1]) # width, height
         _, canvas = self._get_rendered_mask_display(
             self.selected_mask_ids.tobytes(),
             self.unmuted,
+            self.maximum_displayed_channels,
             self.display_channel_offset,
             self.display_layer_offset
         )
@@ -1068,8 +1071,8 @@ class App():
 
 
     @lru_cache(maxsize=4096)
-    def _get_rendered_mask_display(self, mask_ids, unmuted, channel_offset, layer_offset):
-        mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, channel_offset, layer_offset)
+    def _get_rendered_mask_display(self, mask_ids, unmuted, num_channels, channel_offset, layer_offset):
+        mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, num_channels, channel_offset, layer_offset)
         if mask_filtered is None:
             return None, None
         opacity = 0.4
@@ -1109,9 +1112,11 @@ class App():
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
             probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
-        # apply filter_by_layer_offset if enabled
+        # apply filter_by_layer_offset and/or filter_by_channel_offset if enabled
         if self.filter_probe_by_layer_offset and probe.shape[3] > 1:
             probe = probe[:, :, :, min(self.display_layer_offset, probe.shape[3] - 1)][..., None]
+        if self.filter_probe_by_channel_offset and probe.shape[2] > 1:
+            probe = probe[:, :, min(self.display_channel_offset, probe.shape[2] - 1)][..., None, :]
         return probe
     
 

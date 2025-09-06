@@ -193,7 +193,7 @@ def id2contour_cropped(mask_img: np.ndarray, chosen_id: int, mask_channel: int=0
 
 
 # it is faster without jit
-def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, channel_offset: int=0, layer_offset: int=0) -> tuple[np.ndarray, int, int]:
+def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, num_channels: int=3, channel_offset: int=0, layer_offset: int=0) -> tuple[np.ndarray, int, int]:
     """
     Convert a segmentation mask to a mask covering all chosen IDs, with given channel and layer offsets.
     Returns a cropped mask and its position.
@@ -201,6 +201,7 @@ def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, channel_offse
     Args:
         mask_img (np.ndarray): The segmentation mask (values represent labels).
         chosen_ids (np.ndarray): The label IDs to create a mask for in the shape of (channels, layers).
+        num_channels (int): The number of channels to include in the output mask. Defaults to 3.
         channel_offset (int): The channel offset to apply to the mask. If the mask has more than 3 channels, this will get the 3 channels starting from channel_offset.
         layer_offset (int): The layer offset to apply to the mask.
 
@@ -215,8 +216,8 @@ def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, channel_offse
     # apply layer offset (if multilayer), remove layer dimension
     mask_filtered = bool_mask[..., min(layer_offset, bool_mask.shape[-1] - 1)]
     # apply channel offset if necessary
-    if mask_filtered.shape[-1] > 3:
-        mask_filtered = mask_filtered[..., channel_offset:min(channel_offset+3, mask_filtered.shape[-1])]
+    if mask_filtered.shape[-1] > 1:
+        mask_filtered = mask_filtered[..., channel_offset:min(channel_offset+num_channels, mask_filtered.shape[-1])]
     mask_filtered = mask_filtered.any(axis=-1).astype(np.uint8)
     # get the coordinates of the active pixels
     active_pixels = np.argwhere(mask_filtered)
