@@ -185,7 +185,7 @@ class App():
         self._display_channel_or_layer_offset_callbacks()
 
     def _display_channel_or_layer_offset_callbacks(self):
-        if self.filter_probe_by_layer_offset:
+        if self.filter_probe_by_layer_offset or self.filter_probe_by_channel_offset:
             self.compute_event.set()
         self.redraw_background()
         if self.probe_with_mask and self._mask_is_loaded:
