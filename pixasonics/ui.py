@@ -729,19 +729,39 @@ class ProbeSettings():
                 height='auto')
         )
         probe_with_mask_checkbox.tag = "probe_with_mask"
-        probe_same_ids_checkbox = Checkbox(
+        probe_same_ids_across_channels_checkbox = Checkbox(
             value=True,
-            description='Same mask IDs across layers',
-            tooltip='When enabled, the same mask IDs are selected on all layers',
+            description='Same mask IDs across channels (mousing)',
+            tooltip='When enabled, the same mask IDs are selected on all channels when mousing over the canvas',
             indent=False,
             disabled=True,
             layout=Layout(
                 width='auto',
                 height='auto')
         )
-        probe_same_ids_checkbox.tag = "same_mask_ids"
-        mask_checkboxes_box = HBox(
-            [probe_with_mask_checkbox, probe_same_ids_checkbox],
+        probe_same_ids_across_channels_checkbox.tag = "same_mask_ids_across_channels"
+        probe_same_ids_across_layers_checkbox = Checkbox(
+            value=True,
+            description='Same mask IDs across layers (mousing)',
+            tooltip='When enabled, the same mask IDs are selected on all layers when mousing over the canvas',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_same_ids_across_layers_checkbox.tag = "same_mask_ids_across_layers"
+        probe_same_ids_box = VBox(
+            [probe_same_ids_across_channels_checkbox, probe_same_ids_across_layers_checkbox],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                width='95%',
+                padding='0px 10px 0px 20px',
+            )
+        )
+        mask_checkboxes_box = VBox(
+            [probe_with_mask_checkbox, probe_same_ids_box],
             layout=Layout(
                 justify_content='space-between',
                 align_items='flex-start',

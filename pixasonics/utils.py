@@ -22,9 +22,13 @@ def sec2frame(sec, fps):
 
 def array2str(arr, decimals=3, keep_brackets=False):
     """String from an array, where elements are rounded to decimals, and the square brackets are removed."""
+    if type(arr) == list:
+        rounded = np.round(arr, decimals)
+    else: # np.ndarray
+        rounded = np.round(arr, decimals) if arr.dtype != object else arr
     if keep_brackets:
-        return str(np.round(arr, decimals))
-    return str(np.round(arr, decimals)).replace('[', '').replace(']', '')
+        return str(rounded)
+    return str(rounded).replace('[', '').replace(']', '')
 
 @jit(nopython=True)
 def scale_array_exp(
@@ -200,7 +204,7 @@ def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, num_channels:
 
     Args:
         mask_img (np.ndarray): The segmentation mask (values represent labels).
-        chosen_ids (np.ndarray): The label IDs to create a mask for in the shape of (channels, layers).
+        chosen_ids (np.ndarray): The label IDs to create a mask for. Either in the shape of (channels, layers), or, if 1D, the same set of multiple labels will be selected on all channels/layers.
         num_channels (int): The number of channels to include in the output mask. Defaults to 3.
         channel_offset (int): The channel offset to apply to the mask. If the mask has more than 3 channels, this will get the 3 channels starting from channel_offset.
         layer_offset (int): The layer offset to apply to the mask.
@@ -210,7 +214,27 @@ def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, num_channels:
         int: The top edge of the mask.
         int: The left edge of the mask.
     """
-    bool_mask = (mask_img == chosen_ids)
+    # if 1D, use np.isin() to select the same set of IDs for all channels/layers
+    if chosen_ids.ndim == 1:
+        bool_mask = np.isin(mask_img, chosen_ids)
+    # if 2D
+    elif chosen_ids.ndim == 2:
+        # if NOT object type, we can use broadcasting to create a boolean mask
+        if chosen_ids.dtype != object:
+            bool_mask = (mask_img == chosen_ids)
+        # if object type, we need to loop through each channel and layer
+        else:
+            bool_mask = np.zeros_like(mask_img, dtype=bool)
+            chosen_ids_broadcasted = np.broadcast_to(chosen_ids, (mask_img.shape[-2], mask_img.shape[-1]))
+            mask_chans, mask_layers = mask_img.shape[-2], mask_img.shape[-1]
+            for chan in range(mask_chans):
+                for layer in range(mask_layers):
+                    ids = chosen_ids_broadcasted[chan, layer]
+                    if ids:
+                        mask_slice = mask_img[..., chan, layer]
+                        bool_mask[..., chan, layer] = np.isin(mask_slice, ids)
+    else:
+        raise ValueError(f"Invalid chosen_ids shape. Expected 1D or 2D array, got {chosen_ids.ndim}D")
     # multiply with the boolean mask_img to remove 0 labels
     bool_mask *= mask_img.astype(bool)
     # apply layer offset (if multilayer), remove layer dimension

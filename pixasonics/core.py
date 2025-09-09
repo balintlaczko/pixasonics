@@ -84,6 +84,7 @@ class App():
         self._probe_height_on_last_draw = 50
         self._probe_follows_idle_mouse = Model(False)
         self._probe_with_mask = Model(False)
+        self._same_mask_ids_across_channels = Model(True)
         self._same_mask_ids_across_layers = Model(True)
         self._selected_mask_ids = Model(np.zeros((1, 1)))
         self._interaction_mode = Model("Hold")
@@ -268,9 +269,21 @@ class App():
             # enable/disable selected mask ID numbox on UI
             numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
             numbox_selected_mask_id.disabled = not self.probe_with_mask
-            # enable/disable same IDs checkbox on UI
-            checkbox_same_mask_ids = find_widget_by_tag(self.ui, "same_mask_ids")
-            checkbox_same_mask_ids.disabled = not self.probe_with_mask
+            # enable/disable same IDs across channels checkbox on UI
+            checkbox_same_mask_ids_across_channels = find_widget_by_tag(self.ui, "same_mask_ids_across_channels")
+            checkbox_same_mask_ids_across_channels.disabled = not self.probe_with_mask
+            # enable/disable same IDs across layers checkbox on UI
+            checkbox_same_mask_ids_across_layers = find_widget_by_tag(self.ui, "same_mask_ids_across_layers")
+            checkbox_same_mask_ids_across_layers.disabled = not self.probe_with_mask
+
+    @property
+    def same_mask_ids_across_channels(self):
+        return self._same_mask_ids_across_channels.value
+
+    @same_mask_ids_across_channels.setter
+    def same_mask_ids_across_channels(self, value):
+        self._same_mask_ids_across_channels.value = value
+        self._same_mask_ids_across_channels_or_layers_callbacks()
 
     @property
     def same_mask_ids_across_layers(self):
@@ -279,8 +292,9 @@ class App():
     @same_mask_ids_across_layers.setter
     def same_mask_ids_across_layers(self, value):
         self._same_mask_ids_across_layers.value = value
+        self._same_mask_ids_across_channels_or_layers_callbacks()
 
-    def _same_mask_ids_across_layers_callbacks(self):
+    def _same_mask_ids_across_channels_or_layers_callbacks(self):
         self.selected_mask_ids = self.get_mask_ids_under_probe()
         self.update_mask_ids_display()
         self.redraw_mask_display()
@@ -296,18 +310,40 @@ class App():
         # if number convert to a 2d array (channels, layers)
         if np.isscalar(value):
             value = np.array([[value]])
-        elif type(value) == np.array:
-            # if array make sure it is 2 channels
-            if np.ndim(value) < 2:
-                value = np.broadcast_to(value, (self.mask_channels, self.mask_layers))
+        # if it is a list or tuple, convert to a 1D array
+        elif type(value) in [list, tuple]:
+            value = np.array(value)
+        # if it is a set, convert it to a list first (to have a consistent order)
+        elif type(value) == set:
+            value = np.array(list(value))
+        # if it is an array
+        elif type(value) == np.ndarray:
+            # 1D, do not allow object type, otherwise fine
+            if np.ndim(value) == 1:
+                if value.dtype == object:
+                    raise ValueError(f"Cannot interpret a 1D object array. For object-type arrays, use a 2D array with shape broadcastable to {(self.mask_channels, self.mask_layers)}.")
+            # 0D, convert to 2D
+            if np.ndim(value) == 0:
+                value = np.array([[value]])
+            # if 2D, make sure it can be broadcast to the loaded mask's (channels, layers)
+            elif np.ndim(value) == 2:
+                try:
+                    _test = np.broadcast_to(value, (self.mask_channels, self.mask_layers))
+                except ValueError:
+                    raise ValueError(f"Invalid array shape. Cannot broadcast to mask shape {(self.mask_channels, self.mask_layers)}")
+                # if object type, make sure each element is a list or int
+                if value.dtype == object:
+                    for elem in value.flat:
+                        if not isinstance(elem, (list, int)):
+                            raise ValueError(f"Invalid element type in object array. Expected list or int, got {type(elem)}.")
+            # do not allow more than 2D
             elif np.ndim(value) > 2:
                 raise ValueError(f"Invalid array shape. Expected up-to 2D array, got {np.ndim(value)}D")
-        # broadcast to mask shape
-        value = np.broadcast_to(value, (self.mask_channels, self.mask_layers))
         # clip to valid range
-        value = np.clip(value, 0, self.highest_mask_id)
-        # repeat the last value if all zeros
-        value = value if value.sum() != 0 else self._selected_mask_ids.value
+        # value = np.clip(value, 0, self.highest_mask_id)
+        # repeat the previous value if all zeros (if not object type)
+        if value.dtype != object:
+            value = value if value.sum() != 0 else self._selected_mask_ids.value
         changed = not np.array_equal(value, self._selected_mask_ids.value)
         self._selected_mask_ids.value = value
         if changed or self._unmuted_changed:
@@ -461,11 +497,17 @@ class App():
     
     @unmuted.setter
     def unmuted(self, value):
+        changed = value != self._unmuted
         self._unmuted = value
         if value:
             self.master_envelope.on()
         else:
             self.master_envelope.off()
+        if changed and not self._nrt:
+            if self.probe_with_mask and self._mask_is_loaded:
+                self.redraw_mask_display()
+            self.draw()
+
 
     @property
     def _unmuted_changed(self):
@@ -605,9 +647,12 @@ class App():
         # Probe with mask checkbox
         chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
         self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self._probe_with_mask_callbacks)
+        # Same mask IDs across channels checkbox
+        chkbox_same_mask_ids_across_channels = find_widget_by_tag(self.ui, "same_mask_ids_across_channels")
+        self._same_mask_ids_across_channels.bind_widget(chkbox_same_mask_ids_across_channels, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
         # Same mask IDs across layers checkbox
-        chkbox_same_mask_ids = find_widget_by_tag(self.ui, "same_mask_ids")
-        self._same_mask_ids_across_layers.bind_widget(chkbox_same_mask_ids, extra_callback=self._same_mask_ids_across_layers_callbacks)
+        chkbox_same_mask_ids_across_layers = find_widget_by_tag(self.ui, "same_mask_ids_across_layers")
+        self._same_mask_ids_across_layers.bind_widget(chkbox_same_mask_ids_across_layers, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
         # Selected mask ID numbox
         # need to do it manually because it is not a constant two-way model
         numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
@@ -1035,10 +1080,14 @@ class App():
     def get_mask_ids_under_probe(self):
         if not self._mask_is_loaded:
             raise ValueError("Mask is not loaded")
-        if not self.same_mask_ids_across_layers:
+        if not self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
             mask_ids = self.mask[self.probe_y, self.probe_x, :, :]
-        else:
+        elif self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
             mask_ids = self.mask[self.probe_y, self.probe_x, :, min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None]
+        elif not self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
+            mask_ids = self.mask[self.probe_y, self.probe_x, min(self.display_channel_offset, self.mask.shape[-2] - 1), :][..., None, :]
+        else: # self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
+            mask_ids = self.mask[self.probe_y, self.probe_x, min(self.display_channel_offset, self.mask.shape[-2] - 1), min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None, None]
         return mask_ids
 
 
@@ -1105,9 +1154,25 @@ class App():
             np.ndarray: The probe matrix.
         """
         if self.probe_with_mask and self._mask_is_loaded:
-            mask = (self.mask != self.selected_mask_ids) | (self.mask == 0)
-            mask = np.broadcast_to(mask, self.bg_hires.shape)
-            probe = np.ma.masked_array(self.bg_hires, mask=mask)
+            if self.selected_mask_ids.ndim == 1:
+                selected_mask = np.isin(self.mask, self.selected_mask_ids)
+            elif self.selected_mask_ids.ndim == 2:
+                if self.selected_mask_ids.dtype != object:
+                    selected_mask = (self.mask == self.selected_mask_ids)
+                else:
+                    selected_mask = np.zeros_like(self.mask, dtype=bool)
+                    selected_mask_ids_broadcasted = np.broadcast_to(self.selected_mask_ids, (self._mask_channels, self._mask_layers))
+                    for chan in range(self._mask_channels):
+                        for layer in range(self._mask_layers):
+                            ids = selected_mask_ids_broadcasted[chan, layer]
+                            if ids:
+                                mask_slice = self.mask[:, :, chan, layer]
+                                selected_mask[:, :, chan, layer] = np.isin(mask_slice, ids)
+            else:
+                raise ValueError("selected_mask_ids must be 1D or 2D array")
+            unselected_mask = (~selected_mask) | (self.mask == 0)
+            unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
+            probe = np.ma.masked_array(self.bg_hires, mask=unselected_mask_broadcasted)
         else:
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
@@ -1436,12 +1501,24 @@ class App():
         self.master_slider_db.set_value(self.master_volume)
 
     def update_mask_ids_display(self):
-        condition = (self._mask_channels == 1 and (self._mask_layers == 1 or self.same_mask_ids_across_layers))
+        # object type filters will always be used for selecting multiple IDs on the same channel or layer
+        not_object_type = self.selected_mask_ids.dtype != object
+        # # both same on channels and layers should be true to use the same single ID for all channels and layers
+        # same_on_channels = (self.same_mask_ids_across_channels or self._mask_channels == 1)
+        # same_on_layers = (self.same_mask_ids_across_layers or self._mask_layers == 1)
+        # in case the user provides a single ID, we can also show the numbox
+        single_id = self.selected_mask_ids.size == 1
+        # numbox_condition = (not_object_type and ((same_on_channels and same_on_layers) or single_id))
+        numbox_condition = (not_object_type and single_id)
+         # escape if in headless mode
+        if self._headless:
+            return
+         # show either the numbox or the text field
         numbox = find_widget_by_tag(self.ui, "selected_mask_id")
-        numbox.layout.display = "flex" if condition else "none"
+        numbox.layout.display = "flex" if numbox_condition else "none"
         text = find_widget_by_tag(self.ui, "selected_mask_ids")
-        text.layout.display = "none" if condition else "flex"
-        if condition:
+        text.layout.display = "none" if numbox_condition else "flex"
+        if numbox_condition:
             numbox.value = self.selected_mask_ids[0, 0]
         else:
             text.value = array2str(self.selected_mask_ids, keep_brackets=True)
