@@ -163,7 +163,12 @@ class App():
         changed = value != self._maximum_displayed_channels.value
         self._maximum_displayed_channels.value = value
         if changed:
-            self.redraw_background()
+            self.maximum_displayed_channels_callbacks()
+
+    def maximum_displayed_channels_callbacks(self):
+        self.redraw_background()
+        if self.probe_with_mask and self._mask_is_loaded:
+            self.redraw_mask_display()
 
     @property
     def display_channel_offset(self):
@@ -622,7 +627,7 @@ class App():
         chkbox_normalize_display_global = find_widget_by_tag(self.ui, "normalize_display_global")
         self._normalize_display_global.bind_widget(chkbox_normalize_display_global, extra_callback=self.redraw_background)
         maximum_displayed_channels_numbox = find_widget_by_tag(self.ui, "maximum_displayed_channels")
-        self._maximum_displayed_channels.bind_widget(maximum_displayed_channels_numbox, extra_callback=self.redraw_background)
+        self._maximum_displayed_channels.bind_widget(maximum_displayed_channels_numbox, extra_callback=self.maximum_displayed_channels_callbacks)
         channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
         self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
@@ -1077,17 +1082,52 @@ class App():
         return bg_display, canvas
 
 
-    def get_mask_ids_under_probe(self):
+    def get_mask_ids_under_probe(
+            self, 
+            x: Optional[Union[int, float]] = None, 
+            y: Optional[Union[int, float]] = None
+            ) -> np.ndarray:
+        """
+        Get the mask IDs under the probe area.
+        If x and y are not provided, use the current probe_x and probe_y.
+        Since the probe_x and probe_y are limited by the probe_width and probe_height,
+        (so that the probe_x and probe_y are always in the center of the probe area),
+        it is possible to provide an unbounded x and y, which will be clamped to the image size.
+        The returned mask IDs will be a 2D array of shape (Channels, Layers).
+        If the mask is not loaded, raises a ValueError.
+
+        Args:
+            x (Optional[Union[int, float]]): The x-coordinate of the probe. Defaults to None.
+            y (Optional[Union[int, float]]): The y-coordinate of the probe. Defaults to None.
+
+        Raises:
+            ValueError: If the mask is not loaded.
+
+        Returns:
+            np.ndarray: The mask IDs under the probe area. A 2D array of shape (Channels, Layers).
+        """
         if not self._mask_is_loaded:
             raise ValueError("Mask is not loaded")
+        # if no xy is provided, use the current probe xy, otherwise clamp to image size
+        if x is None:
+            x = self.probe_x
+        else:
+            x = int(np.round(np.clip(x, 0, self.image_size[1]-1)))
+        if y is None:
+            y = self.probe_y
+        else:
+            y = int(np.round(np.clip(y, 0, self.image_size[0]-1)))
+        # get the mask IDs under the probe area
+        # if same_mask_ids_across_layers and/or same_mask_ids_across_channels is enabled,
+        # then only get the mask ID at the channel/layer offsets
         if not self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
-            mask_ids = self.mask[self.probe_y, self.probe_x, :, :]
+            mask_ids = self.mask[y, x, :, :]
         elif self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
-            mask_ids = self.mask[self.probe_y, self.probe_x, :, min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None]
+            mask_ids = self.mask[y, x, :, min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None]
         elif not self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
-            mask_ids = self.mask[self.probe_y, self.probe_x, min(self.display_channel_offset, self.mask.shape[-2] - 1), :][..., None, :]
+            mask_ids = self.mask[y, x, min(self.display_channel_offset, self.mask.shape[-2] - 1), :][..., None, :]
         else: # self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
-            mask_ids = self.mask[self.probe_y, self.probe_x, min(self.display_channel_offset, self.mask.shape[-2] - 1), min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None, None]
+            mask_ids = self.mask[y, x, min(self.display_channel_offset, self.mask.shape[-2] - 1), min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None, None]
         return mask_ids
 
 
@@ -1447,8 +1487,8 @@ class App():
             # Update probe features, mappers, and render canvas
             # only draw when any of the probe params or unmuted has changed since the last draw
             if self._probe_changed or self._unmuted_changed:
-                if self.probe_with_mask:
-                    self.selected_mask_ids = self.get_mask_ids_under_probe()
+                if self.probe_with_mask and self._mask_is_loaded:
+                    self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
                 self.draw()
 
 
