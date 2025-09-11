@@ -280,6 +280,9 @@ class App():
             # enable/disable same IDs across layers checkbox on UI
             checkbox_same_mask_ids_across_layers = find_widget_by_tag(self.ui, "same_mask_ids_across_layers")
             checkbox_same_mask_ids_across_layers.disabled = not self.probe_with_mask
+            # enable/disable clear all selections button on UI
+            btn_clear_all_selections = find_widget_by_tag(self.ui, "clear_all_selections_btn")
+            btn_clear_all_selections.disabled = not self.probe_with_mask
 
     @property
     def same_mask_ids_across_channels(self):
@@ -312,6 +315,11 @@ class App():
 
     @selected_mask_ids.setter
     def selected_mask_ids(self, value):
+        # if None, set to a 2D zero array
+        set_to_none = False
+        if value is None:
+            set_to_none = True
+            value = np.zeros((1, 1))
         # if number convert to a 2d array (channels, layers)
         if np.isscalar(value):
             value = np.array([[value]])
@@ -346,8 +354,8 @@ class App():
                 raise ValueError(f"Invalid array shape. Expected up-to 2D array, got {np.ndim(value)}D")
         # clip to valid range
         # value = np.clip(value, 0, self.highest_mask_id)
-        # repeat the previous value if all zeros (if not object type)
-        if value.dtype != object:
+        # repeat the previous value if all zeros (if not object type or not deliberately set to None)
+        if value.dtype != object and not set_to_none:
             value = value if value.sum() != 0 else self._selected_mask_ids.value
         changed = not np.array_equal(value, self._selected_mask_ids.value)
         self._selected_mask_ids.value = value
@@ -667,6 +675,11 @@ class App():
             if extra_callback is not None:
                 extra_callback()
         numbox_selected_mask_id.observe(lambda x: _update_selected_mask_id_from_numbox(x, extra_callback=self._selected_mask_ids_callbacks), names='value')
+        # Clear all selections button
+        btn_clear_all_selections = find_widget_by_tag(self.ui, "clear_all_selections_btn")
+        def _clear_all_selections_callback(event):
+            self.selected_mask_ids = None
+        btn_clear_all_selections.on_click(_clear_all_selections_callback)
 
         # Bind the audio settings widgets
         # Audio switch and master volume slider
@@ -1488,7 +1501,9 @@ class App():
             # only draw when any of the probe params or unmuted has changed since the last draw
             if self._probe_changed or self._unmuted_changed:
                 if self.probe_with_mask and self._mask_is_loaded:
-                    self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
+                    # when multiple mask IDs on the same channel/layer are selected, then do not update the selected IDs while moving the probe
+                    if not (self.selected_mask_ids.ndim == 1 or (self.selected_mask_ids.ndim == 2 and self.selected_mask_ids.dtype == object)):
+                        self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
                 self.draw()
 
 

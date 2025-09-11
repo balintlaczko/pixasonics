@@ -788,12 +788,21 @@ class ProbeSettings():
             [selected_mask_id_numbox_label, selected_mask_id_numbox, selected_mask_ids_text],
             layout=Layout(
                 justify_content='flex-start',
-                width='100%'
+                width='95%',
+                padding='0px 10px 0px 20px'
             )
         )
         selected_mask_id_box.tag = "selected_mask_id_box"
+        clear_all_selections_btn = Button(
+            description="Clear all selections",
+            icon='times',
+            tooltip='Clear all selected mask IDs',
+            disabled=True,
+            layout=Layout(height='24px', margin='2px 2px 2px 20px')
+        )
+        clear_all_selections_btn.tag = "clear_all_selections_btn"
         probe_mask_settings_box = VBox(
-            [mask_checkboxes_box, selected_mask_id_box],
+            [mask_checkboxes_box, selected_mask_id_box, clear_all_selections_btn],
             layout=Layout(
                 justify_content='space-around',
                 align_items='flex-start',
