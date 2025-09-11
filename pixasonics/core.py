@@ -82,6 +82,7 @@ class App():
         self._probe_width_on_last_draw = 50
         self._probe_height = Model(50)
         self._probe_height_on_last_draw = 50
+        self._probe_box_select_start_xy = None
         self._probe_follows_idle_mouse = Model(False)
         self._probe_with_mask = Model(False)
         self._same_mask_ids_across_channels = Model(True)
@@ -110,6 +111,7 @@ class App():
         self._mask_channels = -1
         self._mask_layers = -1
         self._highest_mask_id = 0
+        self._displayed_mask_bbox = (0, 0, 0, 0) # y1, x1, y2, x2
         self._headless = headless
         self._draw_lock = False # True disables self.draw()
 
@@ -300,14 +302,15 @@ class App():
     @same_mask_ids_across_layers.setter
     def same_mask_ids_across_layers(self, value):
         self._same_mask_ids_across_layers.value = value
-        self._same_mask_ids_across_channels_or_layers_callbacks()
+        # self._same_mask_ids_across_channels_or_layers_callbacks()
 
-    def _same_mask_ids_across_channels_or_layers_callbacks(self):
-        self.selected_mask_ids = self.get_mask_ids_under_probe()
-        self.update_mask_ids_display()
-        self.redraw_mask_display()
-        if self.unmuted:
-            self.draw()
+    # def _same_mask_ids_across_channels_or_layers_callbacks(self):
+    #     if self.interaction_mode != "Select":
+    #         self.selected_mask_ids = self.get_mask_ids_under_probe()
+    #         self.update_mask_ids_display()
+    #         self.redraw_mask_display()
+    #         if self.unmuted:
+    #             self.draw()
 
     @property
     def selected_mask_ids(self):
@@ -319,10 +322,10 @@ class App():
         set_to_none = False
         if value is None:
             set_to_none = True
-            value = np.zeros((1, 1))
+            value = np.zeros((1, 1), dtype= np.uint16)
         # if number convert to a 2d array (channels, layers)
         if np.isscalar(value):
-            value = np.array([[value]])
+            value = np.array([[int(value)]])
         # if it is a list or tuple, convert to a 1D array
         elif type(value) in [list, tuple]:
             value = np.array(value)
@@ -368,6 +371,15 @@ class App():
             self.update_mask_ids_display()
         if self.unmuted:
             self.draw()
+
+    @property
+    def _multiple_mask_ids_per_sheet_selected(self):
+        selected_mask_ids = self.selected_mask_ids # only get it once
+        return selected_mask_ids.ndim == 1 or (selected_mask_ids.ndim == 2 and selected_mask_ids.dtype == object)
+
+    def mouse_within_mask_bbox(self, x, y):
+        y1, x1, y2, x2 = self._displayed_mask_bbox
+        return x >= x1 and x <= x2 and y >= y1 and y <= y2
 
     @property
     def highest_mask_id(self):
@@ -557,6 +569,8 @@ class App():
     
     @interaction_mode.setter
     def interaction_mode(self, value):
+        if value.capitalize() not in ["Hold", "Toggle", "Select"]:
+            raise ValueError("Invalid interaction mode. Expected one of: 'Hold', 'Toggle', 'Select'.")
         self._interaction_mode.value = value.capitalize()
 
 
@@ -662,10 +676,10 @@ class App():
         self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self._probe_with_mask_callbacks)
         # Same mask IDs across channels checkbox
         chkbox_same_mask_ids_across_channels = find_widget_by_tag(self.ui, "same_mask_ids_across_channels")
-        self._same_mask_ids_across_channels.bind_widget(chkbox_same_mask_ids_across_channels, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
+        self._same_mask_ids_across_channels.bind_widget(chkbox_same_mask_ids_across_channels)#, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
         # Same mask IDs across layers checkbox
         chkbox_same_mask_ids_across_layers = find_widget_by_tag(self.ui, "same_mask_ids_across_layers")
-        self._same_mask_ids_across_layers.bind_widget(chkbox_same_mask_ids_across_layers, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
+        self._same_mask_ids_across_layers.bind_widget(chkbox_same_mask_ids_across_layers)#, extra_callback=self._same_mask_ids_across_channels_or_layers_callbacks)
         # Selected mask ID numbox
         # need to do it manually because it is not a constant two-way model
         numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
@@ -1162,7 +1176,7 @@ class App():
         #     return
         self.canvas[1].clear()
         _, canvas = self._get_rendered_mask_display(
-            self.selected_mask_ids.tobytes(),
+            self._get_hashable_mask_ids(self.selected_mask_ids),
             self.unmuted,
             self.maximum_displayed_channels,
             self.display_channel_offset,
@@ -1172,11 +1186,24 @@ class App():
             self.canvas[1].draw_image(canvas, 0, 0)
 
 
+    def _get_hashable_mask_ids(self, arr):
+        """Creates a hashable representation of a numpy array, handling object arrays."""
+        if arr.dtype == object:
+            # For object arrays, create a canonical string representation.
+            # This is generally faster than python-level iteration for large arrays.
+            stringify = np.vectorize(lambda x: str(sorted(x)) if isinstance(x, list) else str(x))
+            return ''.join(stringify(arr).flat)
+        else:
+            # For numeric arrays, tobytes() is efficient and sufficient.
+            return arr.tobytes()
+
+
     @lru_cache(maxsize=4096)
     def _get_rendered_mask_display(self, mask_ids, unmuted, num_channels, channel_offset, layer_offset):
         mask_filtered, y, x = ids2mask_cropped(self.mask, self.selected_mask_ids, num_channels, channel_offset, layer_offset)
         if mask_filtered is None:
             return None, None
+        self._displayed_mask_bbox = (y, x, y+mask_filtered.shape[0], x+mask_filtered.shape[1]) # top, left, bottom, right
         opacity = 0.4
         mask_display = np.repeat(mask_filtered[..., None] * 255, 4, axis=-1)
         mask_display[..., 2] = 0 # turn off blue
@@ -1231,10 +1258,30 @@ class App():
             y_from = max(self.probe_y - self.probe_height//2, 0)
             probe = self.bg_hires[y_from : y_from + self.probe_height, x_from : x_from + self.probe_width]
         # apply filter_by_layer_offset and/or filter_by_channel_offset if enabled
-        if self.filter_probe_by_layer_offset and probe.shape[3] > 1:
-            probe = probe[:, :, :, min(self.display_layer_offset, probe.shape[3] - 1)][..., None]
-        if self.filter_probe_by_channel_offset and probe.shape[2] > 1:
-            probe = probe[:, :, min(self.display_channel_offset, probe.shape[2] - 1)][..., None, :]
+        # instead of slicing we are doing this with masking to avoid changing the overall shape shape of the probe
+        if self.filter_probe_by_channel_offset or self.filter_probe_by_layer_offset:
+            # Start with an empty mask (all False)
+            offset_mask = np.zeros(probe.shape, dtype=bool)
+            
+            # Create a mask for the channel if filter is on
+            if self.filter_probe_by_channel_offset and probe.shape[2] > 1:
+                channel_mask = np.ones(probe.shape, dtype=bool)
+                channel_idx = min(self.display_channel_offset, probe.shape[2] - 1)
+                channel_mask[:, :, channel_idx, :] = False
+                offset_mask |= channel_mask
+
+            # Create a mask for the layer if filter is on
+            if self.filter_probe_by_layer_offset and probe.shape[3] > 1:
+                layer_mask = np.ones(probe.shape, dtype=bool)
+                layer_idx = min(self.display_layer_offset, probe.shape[3] - 1)
+                layer_mask[:, :, :, layer_idx] = False
+                offset_mask |= layer_mask
+
+            # If a mask already exists on the probe, combine them
+            if np.ma.is_masked(probe):
+                offset_mask |= probe.mask
+
+            probe = np.ma.masked_array(probe.data, mask=offset_mask)
         return probe
     
 
@@ -1436,8 +1483,7 @@ class App():
         """Render new frames for all kernels, then update the HTML canvas with the results."""
         if self._draw_lock:
             return
-        
-        # print("Drawing...")
+
         # Signal the compute thread to start processing
         self.compute_event.set()
 
@@ -1486,9 +1532,7 @@ class App():
         self.last_draw_time = current_time  # Update the last event time
 
         with hold_canvas(self.canvas):
-            # Update probe position without triggering a draw
-            self._probe_x = self.clamp_probe_x(x)
-            self._probe_y = self.clamp_probe_y(y)
+            # parse mouse event (double-click, click, release)
             if pressed == 2:
                 if current_time - self._last_mouse_down_time < 0.2:
                     self.mouse_btn = 2 # Double-click
@@ -1497,14 +1541,90 @@ class App():
                 self._last_mouse_down_time = current_time
             elif pressed == 3:
                 self.mouse_btn = 0
-            # Update probe features, mappers, and render canvas
-            # only draw when any of the probe params or unmuted has changed since the last draw
-            if self._probe_changed or self._unmuted_changed:
+            # If in Select mode, we are either box-selecting the probe or adding/removing mask IDs
+            if self.interaction_mode == "Select":
+                # upon double-click add/remove mask IDs if probing with mask and mask is loaded
                 if self.probe_with_mask and self._mask_is_loaded:
-                    # when multiple mask IDs on the same channel/layer are selected, then do not update the selected IDs while moving the probe
-                    if not (self.selected_mask_ids.ndim == 1 or (self.selected_mask_ids.ndim == 2 and self.selected_mask_ids.dtype == object)):
-                        self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
-                self.draw()
+                    if self.mouse_btn == 2:
+                        # if selected_mask_ids is not in object mode, we need to convert it to object mode
+                        if self.selected_mask_ids.dtype != object:
+                            # if 1D, we have to select the same IDs for all channels and layers
+                            if self.selected_mask_ids.ndim == 1:
+                                current_ids = self.selected_mask_ids.tolist()
+                                selected_mask_ids = np.zeros((self._mask_channels, self._mask_layers), dtype=object)
+                                for chan in range(self._mask_channels):
+                                    for layer in range(self._mask_layers):
+                                        selected_mask_ids[chan, layer] = current_ids.copy()
+                                self.selected_mask_ids = selected_mask_ids
+                            # if 2D we just broadcast it to (channels, layers) and set it to object dtype
+                            elif self.selected_mask_ids.ndim == 2:
+                                current_ids = self.selected_mask_ids #.astype(np.uint16)
+                                selected_mask_ids = np.broadcast_to(current_ids, (self._mask_channels, self._mask_layers))
+                                self.selected_mask_ids = selected_mask_ids.astype(object)
+                        # get the mask IDs under the probe
+                        mask_ids_under_probe = self.get_mask_ids_under_probe(x, y)
+                        # if no mask IDs under the probe, do nothing
+                        if mask_ids_under_probe.sum() != 0:
+                            # broadcast to (channels, layers)
+                            mask_ids_under_probe = np.broadcast_to(mask_ids_under_probe, (self._mask_channels, self._mask_layers))
+                            # add/remove the mask IDs under the probe to/from the selected_mask_ids
+                            for chan in range(self._mask_channels):
+                                for layer in range(self._mask_layers):
+                                    id = int(mask_ids_under_probe[chan, layer])
+                                    if id != 0: # ignore background
+                                        current_ids = self.selected_mask_ids[chan, layer]
+                                        if isinstance(current_ids, np.ndarray):
+                                            current_ids = current_ids.tolist()
+                                        elif not isinstance(current_ids, list):
+                                            current_ids = [current_ids] if current_ids != 0 else []
+                                        if id in current_ids:
+                                            current_ids.remove(id)
+                                        else:
+                                            current_ids.append(id)
+                                        self.selected_mask_ids[chan, layer] = current_ids
+                    # update the mask IDs display
+                    self.update_mask_ids_display()
+                    # redraw the mask display
+                    self.redraw_mask_display()
+                    # compute features and mappers
+                    self.compute_event.set()
+                else: # box-select the probe
+                    if self.mouse_btn == 0:
+                        self._probe_box_select_start_xy = None # reset start xy
+                    elif self.mouse_btn == 1:
+                        if self._probe_box_select_start_xy is None:
+                            self._probe_box_select_start_xy = (x, y)
+                        else:
+                            x0, y0 = self._probe_box_select_start_xy
+                            x1, y1 = x, y
+                            # compute new probe params
+                            new_width = abs(x1 - x0)
+                            new_height = abs(y1 - y0)
+                            new_x = int(np.round(np.clip((x0 + x1) / 2, 0, self.image_size[1]-1)))
+                            new_y = int(np.round(np.clip((y0 + y1) / 2, 0, self.image_size[0]-1)))
+                            # update probe params without triggering a draw
+                            self._probe_width.value = max(new_width, 1)
+                            self._probe_height.value = max(new_height, 1)
+                            self._probe_x = new_x
+                            self._probe_y = new_y
+                            # draw and compute
+                            self.draw()
+
+            else: # Hold or Toggle modes
+                # Update probe position without triggering a draw
+                self._probe_x = self.clamp_probe_x(x)
+                self._probe_y = self.clamp_probe_y(y)
+                # Update probe features, mappers, and render canvas
+                # only draw when any of the probe params or unmuted has changed since the last draw
+                if self._probe_changed or self._unmuted_changed:
+                    if self.probe_with_mask and self._mask_is_loaded:
+                        # when multiple mask IDs on the same channel/layer are selected, then do not update the selected IDs if mouse is within the masks bbox
+                        if self._multiple_mask_ids_per_sheet_selected:
+                            if not self.mouse_within_mask_bbox(x, y):
+                                self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
+                        else: # is single ID per channel/layer, then always update the selected IDs
+                            self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
+                    self.draw()
 
 
     # GUI callbacks

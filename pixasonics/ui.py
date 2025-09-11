@@ -660,10 +660,10 @@ class ProbeSettings():
         
         interaction_mode_label = Label(value="Interaction Mode:")
         interaction_mode_buttons = ToggleButtons(
-            options=['Hold', 'Toggle'],
+            options=['Hold', 'Toggle', 'Select'],
             value='Hold',
             button_style='',
-            tooltips=['Sound while mouse down', 'Double-click to start sound, double-click again to stop'],
+            tooltips=['Sound while mouse down', 'Double-click to start sound, double-click again to stop', 'Draw Probe rectangle or (un)select mask IDs'],
             layout=Layout(padding='0px 0px 0px 10px'),
             style=dict(
                 button_width='70px')
