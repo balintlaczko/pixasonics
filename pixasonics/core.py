@@ -1150,11 +1150,25 @@ class App():
         if not self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
             mask_ids = self.mask[y, x, :, :]
         elif self.same_mask_ids_across_layers and not self.same_mask_ids_across_channels:
-            mask_ids = self.mask[y, x, :, min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None]
+            layer_offset = min(self.display_layer_offset, self.mask.shape[-1] - 1)
+            mask_ids = self.mask[y, x, :, layer_offset][..., None]
         elif not self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
-            mask_ids = self.mask[y, x, min(self.display_channel_offset, self.mask.shape[-2] - 1), :][..., None, :]
+            # for all visible channels (maximum 3) try to get a valid mask ID
+            # the first channel with a non-zero mask ID will be used
+            for i in range(self.maximum_displayed_channels):
+                channel_offset = min(self.display_channel_offset + i, self.mask.shape[-2] - 1)
+                mask_ids = self.mask[y, x, channel_offset, :][..., None, :]
+                if mask_ids.sum() > 0:
+                    break
         else: # self.same_mask_ids_across_layers and self.same_mask_ids_across_channels:
-            mask_ids = self.mask[y, x, min(self.display_channel_offset, self.mask.shape[-2] - 1), min(self.display_layer_offset, self.mask.shape[-1] - 1)][..., None, None]
+            layer_offset = min(self.display_layer_offset, self.mask.shape[-1] - 1)
+            # for all visible channels (maximum 3) try to get a valid mask ID
+            # the first channel with a non-zero mask ID will be used
+            for i in range(self.maximum_displayed_channels):
+                channel_offset = min(self.display_channel_offset + i, self.mask.shape[-2] - 1)
+                mask_ids = self.mask[y, x, channel_offset, layer_offset][..., None, None]
+                if mask_ids.sum() > 0:
+                    break
         return mask_ids
 
 
