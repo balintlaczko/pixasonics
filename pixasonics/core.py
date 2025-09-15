@@ -1690,18 +1690,14 @@ class App():
         self.master_slider_db.set_value(self.master_volume)
 
     def update_mask_ids_display(self):
-        # object type filters will always be used for selecting multiple IDs on the same channel or layer
-        not_object_type = self.selected_mask_ids.dtype != object
-        # # both same on channels and layers should be true to use the same single ID for all channels and layers
-        # same_on_channels = (self.same_mask_ids_across_channels or self._mask_channels == 1)
-        # same_on_layers = (self.same_mask_ids_across_layers or self._mask_layers == 1)
-        # in case the user provides a single ID, we can also show the numbox
-        single_id = self.selected_mask_ids.size == 1
-        # numbox_condition = (not_object_type and ((same_on_channels and same_on_layers) or single_id))
-        numbox_condition = (not_object_type and single_id)
          # escape if in headless mode
         if self._headless:
             return
+        # object type filters will always be used for selecting multiple IDs on the same channel or layer
+        not_object_type = self.selected_mask_ids.dtype != object
+        # in case the user provides a single ID, we can also show the numbox
+        single_id = self.selected_mask_ids.size == 1
+        numbox_condition = (not_object_type and single_id)
          # show either the numbox or the text field
         numbox = find_widget_by_tag(self.ui, "selected_mask_id")
         numbox.layout.display = "flex" if numbox_condition else "none"
