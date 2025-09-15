@@ -355,8 +355,6 @@ class App():
             # do not allow more than 2D
             elif np.ndim(value) > 2:
                 raise ValueError(f"Invalid array shape. Expected up-to 2D array, got {np.ndim(value)}D")
-        # clip to valid range
-        # value = np.clip(value, 0, self.highest_mask_id)
         # repeat the previous value if all zeros (if not object type or not deliberately set to None)
         if value.dtype != object and not set_to_none:
             value = value if value.sum() != 0 else self._selected_mask_ids.value
@@ -1051,9 +1049,6 @@ class App():
         # if two channels, add a third empty channel
         elif img.shape[2] == 2:
             img = np.concatenate([img, np.zeros(img.shape[:2] + (1,), dtype=img.dtype)], axis=2)
-        # # if more than 3 channels, slice 3 channels according to the channel offset
-        # elif img.shape[2] > 3:
-        #     img = img[:, :, channel_offset:channel_offset+3]
         # if adding transparency, copy the first channel into the alpha and multiply it with the opacity value
         if add_transparency:
             img = np.concatenate([img, (img[..., :1] * opacity)], axis=2)
