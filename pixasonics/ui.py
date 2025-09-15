@@ -949,7 +949,7 @@ class AudioSettings():
         self.box.tag = "audio_settings"
 
 
-class ImageSettings():
+class DisplaySettings():
     def __init__(self):
         self.create_ui()
 

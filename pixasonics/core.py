@@ -1,6 +1,6 @@
 from .features import Feature
 from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, ids2mask_cropped, array2str
-from .ui import MapperCard, AppUI, ImageSettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
+from .ui import MapperCard, AppUI, DisplaySettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
 from .synths import Synth, Envelope
 from ipycanvas import hold_canvas, MultiCanvas, Canvas
 from IPython.display import display
@@ -616,7 +616,7 @@ class App():
     
 
     def create_ui(self):
-        image_settings = ImageSettings()
+        display_settings = DisplaySettings()
         probe_settings = ProbeSettings(
             canvas_width=self.image_size[1],
             canvas_height=self.image_size[0]
@@ -624,7 +624,7 @@ class App():
         audio_settings = AudioSettings()
         self.ui = AppUI(
             audio_settings, 
-            image_settings, 
+            display_settings, 
             probe_settings,
             canvas_height=self.image_size[0],
             canvas_width=self.image_size[1])()
