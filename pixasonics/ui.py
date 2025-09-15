@@ -987,6 +987,82 @@ class DisplaySettings():
                 align_items='flex-start', 
                 padding='5px'))
 
+        # display_normalization_low_percentile_label = Label(value="Low Percentile:")
+        display_normalization_low_percentile_slider = FloatSlider(
+            value=0.0,
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            disabled=False,
+            description='Low Percentile:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        display_normalization_low_percentile_slider.tag = "display_normalization_low_percentile_slider"
+        display_normalization_low_percentile_text = Text(
+            value=array2str([0]),
+            placeholder='(default)',
+            description='Low Percentile:',
+            disabled=True,
+            layout=Layout(width='95%', display='none'),
+            style=dict(description_width='100px')
+        )
+        display_normalization_low_percentile_text.tag = "display_normalization_low_percentile_text"
+        display_normalization_low_percentile_box = HBox(
+            [display_normalization_low_percentile_slider, display_normalization_low_percentile_text],
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%',
+                # padding='0px 0px 0px 3px'
+            )
+        )
+        display_normalization_low_percentile_box.tag = "display_normalization_low_percentile_box"
+
+        # display_normalization_high_percentile_label = Label(value="High Percentile:")
+        display_normalization_high_percentile_slider = FloatSlider(
+            value=100.0,
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            disabled=False,
+            description='High Percentile:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        display_normalization_high_percentile_slider.tag = "display_normalization_high_percentile_slider"
+        display_normalization_high_percentile_text = Text(
+            value=array2str([100]),
+            placeholder='(default)',
+            description='High Percentile:',
+            disabled=True,
+            layout=Layout(width='95%', display='none'),
+            style=dict(description_width='100px')
+        )
+        display_normalization_high_percentile_text.tag = "display_normalization_high_percentile_text"
+        display_normalization_high_percentile_box = HBox(
+            [display_normalization_high_percentile_slider, display_normalization_high_percentile_text],
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%',
+            )
+        )
+        display_normalization_high_percentile_box.tag = "display_normalization_high_percentile_box"
+
+        display_normalization_percentile_settings_box = VBox(
+            [display_normalization_low_percentile_box, display_normalization_high_percentile_box],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                width='100%',
+                # padding='0px 0px 0px 34px',
+            )
+        )
+        display_normalization_percentile_settings_box.tag = "display_normalization_percentile_settings_box"
+
         maximum_displayed_channels_label = Label(value="Maximum displayed channels:")
         maximum_displayed_channels_numbox = BoundedIntText(
             value=3,
@@ -1035,20 +1111,19 @@ class DisplaySettings():
         layer_offset.tag = "layer_offset"
 
         self.box = VBox(
-            [normalize_box, maximum_displayed_channels_box, channel_offset, layer_offset],
+            [normalize_box, display_normalization_percentile_settings_box, maximum_displayed_channels_box, channel_offset, layer_offset],
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
-                flex_flow='column',
                 ))
-        self.box.tag = "image_settings"
+        self.box.tag = "display_settings"
 
 
 class AppUI():
     def __init__(
             self,
             audio_settings,
-            image_settings,
+            display_settings,
             probe_settings, 
             canvas_width=500,
             canvas_height=500, 
@@ -1056,12 +1131,12 @@ class AppUI():
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        self.create_ui(audio_settings, image_settings, probe_settings, canvas_height)
+        self.create_ui(audio_settings, display_settings, probe_settings, canvas_height)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self, audio_settings, image_settings, probe_settings, canvas_height):
+    def create_ui(self, audio_settings, display_settings, probe_settings, canvas_height):
         features_carousel = VBox([], layout=Layout(overflow='scroll'))
         features_carousel.tag = "features_carousel"
         synths_carousel = VBox([], layout=Layout(overflow='scroll'))
@@ -1084,7 +1159,7 @@ class AppUI():
         app_settings = Accordion(
             children=[
                 audio_settings(),
-                image_settings(),
+                display_settings(),
                 probe_settings(), 
                 features_carousel, 
                 synths_carousel, 

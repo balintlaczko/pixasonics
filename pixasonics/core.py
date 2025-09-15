@@ -9,7 +9,7 @@ import numpy as np
 import signalflow as sf
 from PIL import Image
 import threading
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional, Union, Literal
 from functools import lru_cache
 
 class AppRegistry:
@@ -101,6 +101,8 @@ class App():
         self._sample_rate = 48000 # sample_rate
         self._normalize_display = Model(False)
         self._normalize_display_global = Model(False)
+        self._display_normalization_low_percentile = Model([0.0])
+        self._display_normalization_high_percentile = Model([100.0])
         self._maximum_displayed_channels = Model(3)
         self._display_channel_offset = Model(0)
         self._display_layer_offset = Model(0)
@@ -154,6 +156,51 @@ class App():
     def normalize_display_global(self, value):
         self._normalize_display_global.value = value
         self.redraw_background()
+    
+    def _display_normalization_setter_typecheck(self, value, which: Literal['low', 'high']):
+        # only accept int, float and list
+        if isinstance(value, (int, float)):
+            value = [float(value)]
+        elif isinstance(value, list):
+            # check that list length is 1 or equal to number of channels
+            assert len(value) in [1, self.bg_hires.shape[2]], f"Invalid length for display_normalization_{which}_percentile list. Expected 1 or {self.bg_hires.shape[2]}, got {len(value)}."
+            value = [float(v) for v in value] # convert to float
+        else:
+            raise ValueError(f"Invalid value for display_normalization_{which}_percentile. Expected int, float, or list.")
+        return value
+    
+    @property
+    def display_normalization_low_percentile(self):
+        return self._display_normalization_low_percentile.value
+
+    @display_normalization_low_percentile.setter
+    def display_normalization_low_percentile(self, value):
+        # type check: only accept int, float and list
+        value = self._display_normalization_setter_typecheck(value, which="low")
+        value = [max(0.0, min(100.0, v)) for v in value]  # clamp to [0, 100]
+        changed = value != self._display_normalization_low_percentile.value
+        self._display_normalization_low_percentile.value = value
+        if changed:
+            self._display_normalization_percentile_callbacks(which="low")
+
+    @property
+    def display_normalization_high_percentile(self):
+        return self._display_normalization_high_percentile.value
+
+    @display_normalization_high_percentile.setter
+    def display_normalization_high_percentile(self, value):
+        # type check: only accept int, float and list
+        value = self._display_normalization_setter_typecheck(value, which="high")
+        value = [max(0.0, min(100.0, v)) for v in value]  # clamp to [0, 100]
+        changed = value != self._display_normalization_high_percentile.value
+        self._display_normalization_high_percentile.value = value
+        if changed:
+            self._display_normalization_percentile_callbacks(which="high")
+
+    def _display_normalization_percentile_callbacks(self, which: Literal['low', 'high']):
+        if not self._headless:
+            self.update_display_normalization_percentile_display(which=which)
+            self.redraw_background()
 
     @property
     def maximum_displayed_channels(self):
@@ -373,7 +420,9 @@ class App():
     @property
     def _multiple_mask_ids_per_sheet_selected(self):
         selected_mask_ids = self.selected_mask_ids # only get it once
-        return selected_mask_ids.ndim == 1 or (selected_mask_ids.ndim == 2 and selected_mask_ids.dtype == object)
+        object_type = selected_mask_ids.dtype == object
+        empty = not np.any(selected_mask_ids)
+        return selected_mask_ids.ndim == 1 or (selected_mask_ids.ndim == 2 and (object_type and not empty))
 
     def mouse_within_mask_bbox(self, x, y):
         y1, x1, y2, x2 = self._displayed_mask_bbox
@@ -642,20 +691,33 @@ class App():
         self.canvas.on_mouse_up(lambda x, y: self.mouse_callback(x, y, pressed=3))  # When mouse button released
 
         # Bind image settings widgets
+        # Normalize display checkboxes
         chkbox_normalize_display = find_widget_by_tag(self.ui, "normalize_display")
         self._normalize_display.bind_widget(chkbox_normalize_display, extra_callback=self.redraw_background)
         chkbox_normalize_display_global = find_widget_by_tag(self.ui, "normalize_display_global")
         self._normalize_display_global.bind_widget(chkbox_normalize_display_global, extra_callback=self.redraw_background)
-        maximum_displayed_channels_numbox = find_widget_by_tag(self.ui, "maximum_displayed_channels")
-        self._maximum_displayed_channels.bind_widget(maximum_displayed_channels_numbox, extra_callback=self.maximum_displayed_channels_callbacks)
+        # Low Percentile slider
+        # need to do it manually because it is not a constant two-way model
+        display_normalization_low_percentile_slider = find_widget_by_tag(self.ui, "display_normalization_low_percentile_slider")
+        def _update_display_normalization_percentile_from_slider(change, which, extra_callback=None):
+            if change['name'] == 'value':
+                selected_prop_name = f'display_normalization_{which}_percentile'
+                setattr(self, selected_prop_name, change['new'])
+            if extra_callback is not None:
+                extra_callback()
+        display_normalization_low_percentile_slider.observe(lambda x: _update_display_normalization_percentile_from_slider(x, which='low', extra_callback=self.redraw_background), names='value')
+        # High Percentile numbox
+        # need to do it manually because it is not a constant two-way model
+        display_normalization_high_percentile_slider = find_widget_by_tag(self.ui, "display_normalization_high_percentile_slider")
+        display_normalization_high_percentile_slider.observe(lambda x: _update_display_normalization_percentile_from_slider(x, which='high', extra_callback=self.redraw_background), names='value')
+        # Maximum displayed channels slider
+        maximum_displayed_channels_slider = find_widget_by_tag(self.ui, "maximum_displayed_channels")
+        self._maximum_displayed_channels.bind_widget(maximum_displayed_channels_slider, extra_callback=self.maximum_displayed_channels_callbacks)
+        # Channel and layer offset sliders
         channel_offset_slider = find_widget_by_tag(self.ui, "channel_offset")
         self._display_channel_offset.bind_widget(channel_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
         layer_offset_slider = find_widget_by_tag(self.ui, "layer_offset")
         self._display_layer_offset.bind_widget(layer_offset_slider, extra_callback=self._display_channel_or_layer_offset_callbacks)
-        filter_probe_by_channel_offset = find_widget_by_tag(self.ui, "filter_probe_by_channel_offset")
-        self._filter_probe_by_channel_offset.bind_widget(filter_probe_by_channel_offset, extra_callback=self.compute_event.set)
-        filter_probe_by_layer_offset = find_widget_by_tag(self.ui, "filter_probe_by_layer_offset")
-        self._filter_probe_by_layer_offset.bind_widget(filter_probe_by_layer_offset, extra_callback=self.compute_event.set)
 
         # Bind the probe settings widgets
         # Probe sliders
@@ -669,6 +731,11 @@ class App():
         # Follow idle mouse checkbox
         chkbox_probe_follows_idle_mouse = find_widget_by_tag(self.ui, "probe_follows_idle_mouse")
         self._probe_follows_idle_mouse.bind_widget(chkbox_probe_follows_idle_mouse)
+        # Filter by channel/layer offset checkboxes
+        filter_probe_by_channel_offset = find_widget_by_tag(self.ui, "filter_probe_by_channel_offset")
+        self._filter_probe_by_channel_offset.bind_widget(filter_probe_by_channel_offset, extra_callback=self.compute_event.set)
+        filter_probe_by_layer_offset = find_widget_by_tag(self.ui, "filter_probe_by_layer_offset")
+        self._filter_probe_by_layer_offset.bind_widget(filter_probe_by_layer_offset, extra_callback=self.compute_event.set)
         # Probe with mask checkbox
         chkbox_probe_with_mask = find_widget_by_tag(self.ui, "probe_with_mask")
         self._probe_with_mask.bind_widget(chkbox_probe_with_mask, extra_callback=self._probe_with_mask_callbacks)
@@ -908,6 +975,14 @@ class App():
                 channel_offset_slider.disabled = True
                 channel_offset_slider.max = 0
 
+            # check display percentile lists, so that they either have 1 element, or a list with length equal to the number of channels
+            if len(self.display_normalization_low_percentile) not in [1, self.bg_hires.shape[2]]:
+                self.display_normalization_low_percentile = 0
+                print(f'Warning: Resetting display normalization low percentile to 0, because the provided list length does not match the number of channels ({self.bg_hires.shape[2]}).')
+            if len(self.display_normalization_high_percentile) not in [1, self.bg_hires.shape[2]]:
+                self.display_normalization_high_percentile = 100
+                print(f'Warning: Resetting display normalization high percentile to 100, because the provided list length does not match the number of channels ({self.bg_hires.shape[2]}).')
+
             # Redraw the background with the new image
             self.redraw_background()
 
@@ -1024,19 +1099,24 @@ class App():
 
     def convert_image_data_for_display(
             self, 
-            img_data, 
-            normalize=False, 
-            global_normalize=False,
-            maximum_displayed_channels=3,
-            channel_offset=0,
-            layer_offset=0,
-            add_transparency=False,
+            img_data: np.ndarray, 
+            normalize: bool = False,
+            global_normalize: bool = False,
+            norm_low_percentile: Union[float, List[float]] = 0.0,
+            norm_high_percentile: Union[float, List[float]] = 100.0,
+            maximum_displayed_channels: Literal[1, 2, 3] = 3,
+            channel_offset: int = 0,
+            layer_offset: int = 0,
+            add_transparency: bool = False,
             opacity: float = 0.5
             ):
         img = self.rescale_image_data_for_display(
             img_data, 
             normalize=normalize, 
-            global_normalize=global_normalize)
+            global_normalize=global_normalize,
+            norm_low_percentile=norm_low_percentile,
+            norm_high_percentile=norm_high_percentile
+        )
         # if 4D, slice the layer according to the layer offset
         if len(img.shape) == 4:
             img = img[:, :, :, layer_offset]
@@ -1055,25 +1135,61 @@ class App():
         return img
 
 
-    def rescale_image_data_for_display(self, img_data, normalize=False, global_normalize=False):
+    def rescale_image_data_for_display(
+            self, 
+            img_data: np.ndarray, 
+            normalize: bool = False, 
+            global_normalize: bool = False,
+            norm_low_percentile: Union[float, List[float]] = 0.0,
+            norm_high_percentile: Union[float, List[float]] = 100.0
+            ):
         if normalize:
+            # Ensure percentiles are lists for consistent processing
+            if isinstance(norm_low_percentile, (int, float)):
+                norm_low_percentile = [norm_low_percentile]
+            if isinstance(norm_high_percentile, (int, float)):
+                norm_high_percentile = [norm_high_percentile]
+
             if global_normalize:
-                return ((img_data - img_data.min()) / (img_data.max() - img_data.min()) * 255).astype(np.uint8)
+                # Use the first percentile value for global normalization
+                low_p = norm_low_percentile[0]
+                high_p = norm_high_percentile[0]
+                img_min = np.percentile(img_data, low_p)
+                img_min = np.broadcast_to(img_min, (img_data.shape[2],))  # Broadcast to number of channels
+                img_max = np.percentile(img_data, high_p)
+                img_max = np.broadcast_to(img_max, (img_data.shape[2],))  # Broadcast to number of channels   
             else:
-                # if 3D
-                if len(img_data.shape) == 3: # H, W, C
-                    return ((img_data - img_data.min(axis=(0, 1))) / (img_data.max(axis=(0, 1)) - img_data.min(axis=(0, 1))) * 255).astype(np.uint8)
-                # if 4D
-                elif len(img_data.shape) == 4: # H, W, C, L
-                    img_min = img_data.min(axis=(0, 1, 3))[..., None] # reduce H, W, L
-                    img_max = img_data.max(axis=(0, 1, 3))[..., None]
-                    return ((img_data - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+                # Per-channel normalization
+                num_channels = img_data.shape[2]    
+                # Broadcast percentile lists if they have a single element
+                if len(norm_low_percentile) == 1:
+                    norm_low_percentile = norm_low_percentile * num_channels
+                if len(norm_high_percentile) == 1:
+                    norm_high_percentile = norm_high_percentile * num_channels
+                # Calculate percentiles per-channel
+                img_reshaped = np.moveaxis(img_data, 2, -1)
+                img_min = np.percentile(img_reshaped, norm_low_percentile, axis=(0, 1, 2)) # shape (Channels, Channels)
+                img_min = np.diag(img_min) # shape (Channels,)
+                img_max = np.percentile(img_reshaped, norm_high_percentile, axis=(0, 1, 2)) # shape (Channels, Channels)
+                img_max = np.diag(img_max) # shape (Channels,)
+            
+            # Avoid division by zero
+            range_val = img_max - img_min
+            # Use a small epsilon to handle the case where range_val is zero
+            range_val[range_val == 0] = np.finfo(float).eps
+            # Clip and scale the data
+            img_min = img_min[None, None, :, None]  # Reshape for broadcasting
+            range_val = range_val[None, None, :, None]  # Reshape for broadcasting
+            scaled_data = np.clip((img_data - img_min) / range_val, 0, 1)
+            return (scaled_data * 255).astype(np.uint8)
+
         # if not normalizing then divide by max value of the data type
         if np.issubdtype(img_data.dtype, np.integer):
             return (img_data / np.iinfo(img_data.dtype).max * 255).astype(np.uint8)
         else:
-            return (img_data / np.finfo(img_data.dtype).max * 255).astype(np.uint8)
-        
+            # For float, assume range is [0, 1] if not normalizing
+            return (np.clip(img_data, 0, 1.0) * 255).astype(np.uint8)
+
     
     def redraw_background(self):
         if self._headless:
@@ -1083,6 +1199,8 @@ class App():
         self.bg_display, canvas = self._get_rendered_image_display(
             self._normalize_display.value,
             self._normalize_display_global.value,
+            str(self._display_normalization_low_percentile.value), #TODO: optimization: only check currently displayed channels?
+            str(self._display_normalization_high_percentile.value),
             self.maximum_displayed_channels,
             self.display_channel_offset,
             self.display_layer_offset
@@ -1090,11 +1208,22 @@ class App():
         self.canvas[0].draw_image(canvas, 0, 0)
 
     @lru_cache(maxsize=512)
-    def _get_rendered_image_display(self, normalize, global_normalize, maximum_displayed_channels, channel_offset, layer_offset):
+    def _get_rendered_image_display(
+        self, 
+        normalize: bool, 
+        global_normalize: bool,
+        norm_low_percentile: str, # from list to make it hashable
+        norm_high_percentile: str, # from list to make it hashable
+        maximum_displayed_channels: Literal[1, 2, 3],
+        channel_offset: int,
+        layer_offset: int
+        ):
         bg_display = self.convert_image_data_for_display(
             self.bg_hires, 
             normalize=normalize, 
             global_normalize=global_normalize,
+            norm_low_percentile=self.display_normalization_low_percentile, # here we use the original list
+            norm_high_percentile=self.display_normalization_high_percentile, # here we use the original list
             maximum_displayed_channels=maximum_displayed_channels,
             channel_offset=channel_offset,
             layer_offset=layer_offset
@@ -1702,6 +1831,24 @@ class App():
             numbox.value = self.selected_mask_ids[0, 0]
         else:
             text.value = array2str(self.selected_mask_ids, keep_brackets=True)
+
+    def update_display_normalization_percentile_display(self, which: Literal['low', 'high']):
+        # escape if in headless mode
+        if self._headless:
+            return
+        selected_prop_name = f'display_normalization_{which}_percentile'
+        not_a_list = not isinstance(getattr(self, selected_prop_name), list)
+        single_value = len(getattr(self, selected_prop_name)) == 1 if not not_a_list else False
+        slider_condition = not_a_list or single_value
+        # show either the slider or the text field
+        slider = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_slider")
+        slider.layout.display = "flex" if slider_condition else "none"
+        text = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_text")
+        text.layout.display = "none" if slider_condition else "flex"
+        if slider_condition:
+            slider.value = getattr(self, selected_prop_name)[0]
+        else:
+            text.value = array2str(getattr(self, selected_prop_name))
 
 
 class Mapper():
