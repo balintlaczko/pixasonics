@@ -65,9 +65,9 @@ class App():
         # Global state variables
         self.is_drawing = False
         self.last_draw_time = time.time()
-        self.bg_hires = np.zeros(image_size + (3,), dtype=np.float64)
+        self.bg_hires = np.zeros(image_size + (1, 1), dtype=np.float64)
         self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
-        self.mask = np.zeros(image_size + (3,), dtype=np.int64)
+        self.mask = np.zeros(image_size + (1, 1), dtype=np.int64)
         self.mask_display = np.zeros(image_size + (3,), dtype=np.uint8)
 
         # Private properties
