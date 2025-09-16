@@ -7,6 +7,7 @@ from typing import Dict, List
 import copy
 
 PARAM_SLIDER_DEBOUNCE_TIME = 0.05
+PARAM_SMOOTHING_TIME = 0.01
 
 class Synth():
     def __init__(
@@ -95,7 +96,7 @@ class Synth():
     
     def create_audio_graph(self):
         graph = sf.AudioGraph.get_shared_graph()
-        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
+        mix_val = sf.calculate_decay_coefficient(PARAM_SMOOTHING_TIME, graph.sample_rate, 0.001)
         self.patch = sf.Patch(self.patch_spec)
         # generate param buffers & players & smoothers for each param
         param_names = list(self.params.keys())
@@ -309,7 +310,7 @@ class FilteredNoisePatch(sf.Patch):
         resonance = self.add_input("resonance", resonance)
         resonance_clipped = sf.Clip(resonance, 0.0, 0.999)
         graph = sf.AudioGraph.get_shared_graph()
-        mix_val = sf.calculate_decay_coefficient(0.05, graph.sample_rate, 0.001)
+        mix_val = sf.calculate_decay_coefficient(PARAM_SMOOTHING_TIME, graph.sample_rate, 0.001)
         # create the synth
         noise = sf.WhiteNoise()
         # first one
