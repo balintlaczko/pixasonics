@@ -2,6 +2,7 @@ import numpy as np
 import signalflow as sf
 from .ui import FeatureCard, find_widget_by_tag
 from .utils import array2str, filter_matrix
+import time
 
 
 class Feature():
@@ -150,6 +151,7 @@ class Feature():
         return tuple(i for i in range(4) if i != self.target_dim)
 
     def __call__(self, mat):
+        t0 = time.perf_counter()
         mat_filtered = filter_matrix(
             mat,
             self.filter_rows,
@@ -157,16 +159,26 @@ class Feature():
             self.filter_channels,
             self.filter_layers
         )
+        t1 = time.perf_counter()
         computed = self.compute(mat_filtered)
+        t2 = time.perf_counter()
         # Here we need to assert that the computed shape is 1D (num_features,)
         assert len(computed.shape) == 1, f"Computed shape is not 1D: {computed.shape}"
         if computed.shape[0] != self.num_features:
             # self.initialize(mat_filtered)
             self.initialize(computed) # TODO: this means it will always take the local minmax
         self.features.data[:, :] = computed[..., None] # add the sample dimension, so it is (num_features, 1)
-
+        t3 = time.perf_counter()
         self.update_minmax() # then we have to keep a running minmax
         self.update_ui()
+        t4 = time.perf_counter()
+        self.timer = {
+            "filter": t1 - t0,
+            "compute": t2 - t1,
+            "update_features": t3 - t2,
+            "update_ui": t4 - t3,
+            "total": t4 - t0
+        }
     
     def compute(self, mat):
         """Compute the feature from the matrix, override this method for custom computation.
