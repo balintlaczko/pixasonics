@@ -1391,6 +1391,14 @@ class App():
             unselected_mask = (~selected_mask) | (self.mask == 0)
             unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
             probe = np.ma.masked_array(self.bg_hires, mask=unselected_mask_broadcasted)
+            # crop H and W to the bounding box of the selected mask
+            active_2d = np.any(~unselected_mask_broadcasted, axis=(2, 3))
+            rows = np.where(active_2d.any(axis=1))[0]
+            cols = np.where(active_2d.any(axis=0))[0]
+            if rows.size > 0 and cols.size > 0:
+                y_min, y_max = rows[0], rows[-1] + 1
+                x_min, x_max = cols[0], cols[-1] + 1
+                probe = probe[y_min:y_max, x_min:x_max]
         else:
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
@@ -2121,12 +2129,15 @@ class Mapper():
     
 
     def _map(self, frame=None):
+        t0 = time.perf_counter()
         # get the feature data from its buffer
         in_data = self.source_buffer.data
         mappings = self.map(in_data)
+        t1 = time.perf_counter()
 
         if self.clamp:
             mappings = self.clamp_mappings(mappings)
+        t2 = time.perf_counter()
 
         if not self.nrt:
             # if we are in real-time mode, set all targets parameters to the scaled values
@@ -2145,6 +2156,13 @@ class Mapper():
                 scaled_val = mappings[i]
                 target_output_buffer = self._output_buffers[i]
                 target_output_buffer.data[:, frame] = scaled_val[:, 0]
+        t3 = time.perf_counter()
+        self.timer = {
+            "map": t1 - t0,
+            "clamp": t2 - t1,
+            "set": t3 - t2,
+            "total": t3 - t0
+        }
 
     def __call__(self, frame=None):
         self._map(frame)
