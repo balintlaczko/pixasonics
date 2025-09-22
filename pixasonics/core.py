@@ -10,7 +10,10 @@ import signalflow as sf
 from PIL import Image
 import threading
 from typing import List, Tuple, Dict, Optional, Union, Literal
-from functools import lru_cache
+from functools import lru_cache, wraps
+from contextlib import contextmanager
+import asyncio
+from itertools import chain
 
 class AppRegistry:
     _instance = None
@@ -44,6 +47,28 @@ class AppRegistry:
                 app.audio = app._audio_prev
                 app._audio_prev = None
 
+
+def ui_callback(func):
+    """
+    Decorator for methods that update the UI.
+    
+    Queues the specific method call (with its arguments) if UI is held.
+    """
+    @wraps(func)
+    def wrapper(instance, *args, **kwargs):
+        if instance._headless:
+            return
+
+        if instance._hold_ui:
+            # Create a hashable representation of the call
+            # kwargs are converted to a frozenset of items to be hashable
+            pending_call = (wrapper, args, frozenset(kwargs.items()))
+            instance._pending_ui_callbacks.add(pending_call)
+        else:
+            return func(instance, *args, **kwargs)
+    return wrapper
+
+
 class App():
     def __init__(
             self,
@@ -62,9 +87,16 @@ class App():
         self.compute_event = threading.Event()
         self.stop_event = threading.Event()
 
+        # Debounced UI flushing (main/UI thread only) — for Features and Synths
+        self._ui_flush_handle = None  # asyncio.Handle for scheduled flush
+        self._ui_flush_delay = 0.05  # seconds
+        self._ui_flush_min_interval = 0.1  # seconds
+        self._last_ui_update_time = 0.0  # timestamp of last flush
+        self._ui_loop = None  # will hold the UI asyncio loop
+
         # Global state variables
         self.is_drawing = False
-        self.last_draw_time = time.time()
+        self.last_draw_time = time.perf_counter()
         self.bg_hires = np.zeros(image_size + (1, 1), dtype=np.float64)
         self.bg_display = np.zeros(image_size + (3,), dtype=np.uint8)
         self.mask = np.zeros(image_size + (1, 1), dtype=np.int64)
@@ -116,6 +148,21 @@ class App():
         self._displayed_mask_bbox = (0, 0, 0, 0) # y1, x1, y2, x2
         self._headless = headless
         self._draw_lock = False # True disables self.draw()
+        self._hold_ui = False # True holds all draw calls and ui updates until hold_ui is set to False again
+        self._pending_ui_callbacks = set() # Stores pending callback functions when self._hold_ui is True
+        self._mask_display_pending = False
+        # a fixed call order for the pending callbacks
+        self._ui_callback_order = [
+            # update UI elements
+            self.toggle_audio_btn,
+            self._probe_with_mask_callbacks,
+            self.update_mask_ids_display,
+            self.update_display_normalization_percentile_display,
+            # redraw canvases
+            self.redraw_background,
+            self.redraw_mask_display,
+            self.draw,
+        ]
 
         # Containers for features, mappers, and synths
         self.features = []
@@ -129,6 +176,37 @@ class App():
         self.start_compute_thread()
 
         AppRegistry().register(self)
+
+    @contextmanager
+    def hold_ui(self):
+        """A context manager to suppress and queue UI calls within a block."""
+        self._hold_ui = True
+        try:
+            yield
+        finally:
+            self._hold_ui = False
+            
+            # Process pending calls based on the method order
+            for ordered_method in self._ui_callback_order:
+                ordered_func = getattr(ordered_method, "__func__", ordered_method)
+                # Find all queued calls that match the current ordered method
+                calls_to_make = [
+                    call for call in self._pending_ui_callbacks
+                    if call[0] == ordered_func
+                ]
+                
+                for call in calls_to_make:
+                    func, args, kwargs_frozenset = call
+                    # Recreate kwargs dict from frozenset and execute
+                    func(self, *args, **dict(kwargs_frozenset))
+                    # Remove the call from the main set once executed
+                    self._pending_ui_callbacks.remove(call)
+
+            # In case any decorated method was not in the order list, run it now.
+            for func, args, kwargs_frozenset in self._pending_ui_callbacks.copy():
+                func(self, *args, **dict(kwargs_frozenset))
+
+            self._pending_ui_callbacks.clear()
 
     @property
     def fps(self):
@@ -198,9 +276,8 @@ class App():
             self._display_normalization_percentile_callbacks(which="high")
 
     def _display_normalization_percentile_callbacks(self, which: Literal['low', 'high']):
-        if not self._headless:
-            self.update_display_normalization_percentile_display(which=which)
-            self.redraw_background()
+        self.update_display_normalization_percentile_display(which=which)
+        self.redraw_background()
 
     @property
     def maximum_displayed_channels(self):
@@ -216,8 +293,7 @@ class App():
 
     def maximum_displayed_channels_callbacks(self):
         self.redraw_background()
-        if self.probe_with_mask and self._mask_is_loaded:
-            self.redraw_mask_display()
+        self.redraw_mask_display()
 
     @property
     def display_channel_offset(self):
@@ -241,10 +317,9 @@ class App():
 
     def _display_channel_or_layer_offset_callbacks(self):
         if self.filter_probe_by_layer_offset or self.filter_probe_by_channel_offset:
-            self.compute_event.set()
+            self.compute()
         self.redraw_background()
-        if self.probe_with_mask and self._mask_is_loaded:
-            self.redraw_mask_display()
+        self.redraw_mask_display()
 
     @property
     def filter_probe_by_channel_offset(self):
@@ -255,7 +330,7 @@ class App():
         changed = value != self._filter_probe_by_channel_offset.value
         self._filter_probe_by_channel_offset.value = value
         if changed:
-            self.compute_event.set()
+            self.compute()
 
     @property
     def filter_probe_by_layer_offset(self):
@@ -266,7 +341,7 @@ class App():
         changed = value != self._filter_probe_by_layer_offset.value
         self._filter_probe_by_layer_offset.value = value
         if changed:
-            self.compute_event.set()
+            self.compute()
 
     @property
     def image(self):
@@ -316,10 +391,11 @@ class App():
         if changed:
             self._probe_with_mask_callbacks()
 
+    @ui_callback
     def _probe_with_mask_callbacks(self):
-            self.selected_mask_ids = self.get_mask_ids_under_probe()
+            self._selected_mask_ids.value = self.get_mask_ids_under_probe() # don't trigger setter
             self.redraw_mask_display()
-            self.draw()
+            self.compute_and_draw()
             # enable/disable selected mask ID numbox on UI
             numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
             numbox_selected_mask_id.disabled = not self.probe_with_mask
@@ -349,15 +425,6 @@ class App():
     @same_mask_ids_across_layers.setter
     def same_mask_ids_across_layers(self, value):
         self._same_mask_ids_across_layers.value = value
-        # self._same_mask_ids_across_channels_or_layers_callbacks()
-
-    # def _same_mask_ids_across_channels_or_layers_callbacks(self):
-    #     if self.interaction_mode != "Select":
-    #         self.selected_mask_ids = self.get_mask_ids_under_probe()
-    #         self.update_mask_ids_display()
-    #         self.redraw_mask_display()
-    #         if self.unmuted:
-    #             self.draw()
 
     @property
     def selected_mask_ids(self):
@@ -411,11 +478,9 @@ class App():
             self._selected_mask_ids_callbacks()
 
     def _selected_mask_ids_callbacks(self):
-        if not self._headless:
-            self.redraw_mask_display()
-            self.update_mask_ids_display()
-        if self.unmuted:
-            self.draw()
+        self.update_mask_ids_display()
+        self.redraw_mask_display()
+        self.compute_and_draw()
 
     @property
     def _multiple_mask_ids_per_sheet_selected(self):
@@ -460,7 +525,7 @@ class App():
         if self.probe_with_mask:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
-            self.draw()
+            self.compute_and_draw()
     
     @property
     def probe_y(self):
@@ -472,7 +537,7 @@ class App():
         if self.probe_with_mask:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
-            self.draw()
+            self.compute_and_draw()
 
     def update_probe_xy(self):
         # Apply the clamped probe position without triggering a draw
@@ -481,7 +546,7 @@ class App():
         if self.probe_with_mask:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
-            self.draw()
+            self.compute_and_draw()
 
     @property
     def mouse_btn(self):
@@ -520,8 +585,8 @@ class App():
         return (
             self._probe_x != self._probe_x_on_last_draw
             or self._probe_y != self._probe_y_on_last_draw
-            or self._probe_width != self._probe_width_on_last_draw
-            or self._probe_height != self._probe_height_on_last_draw
+            or self._probe_width.value != self._probe_width_on_last_draw
+            or self._probe_height.value != self._probe_height_on_last_draw
         )
 
     @property
@@ -576,9 +641,8 @@ class App():
         else:
             self.master_envelope.off()
         if changed and not self._nrt:
-            if self.probe_with_mask and self._mask_is_loaded:
-                self.redraw_mask_display()
-            self.draw()
+            self.redraw_mask_display()
+            self.compute_and_draw()
 
 
     @property
@@ -594,13 +658,13 @@ class App():
         
     # @output_buffer_size.setter
     # def output_buffer_size(self, value):
-    #     print(f"Setting output buffer size to {value}")
+    #     # print(f"Setting output buffer size to {value}")
     #     self._output_buffer_size = value
-    #     print(f"Destroying audio graph")
+    #     # print(f"Destroying audio graph")
     #     self.graph.destroy()
-    #     print(f"Creating new audio graph")
+    #     # print(f"Creating new audio graph")
     #     self.create_audio_graph()
-    #     # print(f"Re-registering app")
+    #     # # print(f"Re-registering app")
     #     # AppRegistry().notify_reregister(self)
 
     @property
@@ -635,14 +699,16 @@ class App():
 
     def compute_loop(self):
         while not self.stop_event.is_set():
-            self.compute_event.wait()
-            self.compute_event.clear()
-            with self.compute_lock:
-                probe_mat = self.get_probe_matrix()
-                self.compute_features(probe_mat)
-                if self.unmuted:
-                    self.compute_mappers()
-            time.sleep(0.01)  # Small sleep to prevent busy-waiting
+            self.compute_event.wait() # block until signaled
+            # Drain/coalesce multiple signals that arrived during compute
+            while self.compute_event.is_set():
+                self.compute_event.clear()
+                with self.compute_lock:
+                    probe_mat = self.get_probe_matrix()
+                    self.compute_features(probe_mat)
+                    if self.unmuted:
+                        self.compute_mappers()
+                # time.sleep(0.01)  # Small sleep to prevent busy-waiting
 
     def cleanup(self):
         self.stop_compute_thread()
@@ -677,6 +743,12 @@ class App():
             canvas_width=self.image_size[1])()
         display(self.ui)
 
+        # Capture the UI asyncio loop (if available)
+        try:
+            self._ui_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._ui_loop = None
+
         # Create the canvas
         self.canvas = MultiCanvas(
             3,
@@ -700,11 +772,12 @@ class App():
         # need to do it manually because it is not a constant two-way model
         display_normalization_low_percentile_slider = find_widget_by_tag(self.ui, "display_normalization_low_percentile_slider")
         def _update_display_normalization_percentile_from_slider(change, which, extra_callback=None):
-            if change['name'] == 'value':
-                selected_prop_name = f'display_normalization_{which}_percentile'
+            selected_prop_name = f'display_normalization_{which}_percentile'
+            selected_prop_val = getattr(self, selected_prop_name)[0]
+            if change['name'] == 'value' and change['new'] != selected_prop_val:
                 setattr(self, selected_prop_name, change['new'])
-            if extra_callback is not None:
-                extra_callback()
+                if extra_callback is not None:
+                    extra_callback()
         display_normalization_low_percentile_slider.observe(lambda x: _update_display_normalization_percentile_from_slider(x, which='low', extra_callback=self.redraw_background), names='value')
         # High Percentile numbox
         # need to do it manually because it is not a constant two-way model
@@ -749,10 +822,11 @@ class App():
         # need to do it manually because it is not a constant two-way model
         numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
         def _update_selected_mask_id_from_numbox(change, extra_callback=None):
-            if change['name'] == 'value':
+            _value = np.array([[int(change['new'])]]) if change['new'] is not None else np.zeros((1, 1), dtype=np.uint16)
+            if change['name'] == 'value' and not np.array_equal(_value, self.selected_mask_ids):
                 self.selected_mask_ids = change['new'] # it will handle the scalar
-            if extra_callback is not None:
-                extra_callback()
+                if extra_callback is not None:
+                    extra_callback()
         numbox_selected_mask_id.observe(lambda x: _update_selected_mask_id_from_numbox(x, extra_callback=self._selected_mask_ids_callbacks), names='value')
         # Clear all selections button
         btn_clear_all_selections = find_widget_by_tag(self.ui, "clear_all_selections_btn")
@@ -772,6 +846,54 @@ class App():
         recording_path = find_widget_by_tag(self.ui, "recording_path")
         self._recording_path.bind_widget(recording_path)
 
+
+    # debounced UI flush scheduler for Features and Synths
+    def schedule_ui_flush(self, delay: float | None = None):
+        if getattr(self, "_headless", False):
+            return
+        d = self._ui_flush_delay if delay is None else float(delay)
+
+        loop = self._ui_loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+                self._ui_loop = loop
+            except RuntimeError:
+                # No UI loop yet; draw() will still opportunistically flush
+                return
+
+        def _schedule():
+            # cancel previously scheduled flush (debounce)
+            if self._ui_flush_handle is not None:
+                try:
+                    self._ui_flush_handle.cancel()
+                except Exception:
+                    pass
+            self._ui_flush_handle = loop.call_later(d, self.flush_ui)
+
+        loop.call_soon_threadsafe(_schedule)
+
+    # flush both Feature and Synth UI on the UI loop
+    def flush_ui(self):
+        try:
+            # Features
+            for feature in list(getattr(self, "features", [])):
+                if getattr(feature, "_pending_ui", False):
+                    if hasattr(feature, "update_ui_throttled"):
+                        feature.update_ui_throttled(force=True)
+                    elif hasattr(feature, "update_ui"):
+                        feature.update_ui()
+                    feature._pending_ui = False
+            # Synths
+            for synth in list(getattr(self, "synths", [])):
+                if getattr(synth, "_pending_ui", False):
+                    if hasattr(synth, "update_ui_throttled"):
+                        synth.update_ui_throttled(force=True)
+                    elif hasattr(synth, "update_ui"):
+                        synth.update_ui()
+                    synth._pending_ui = False
+        finally:
+            self._ui_flush_handle = None
 
 
     def __call__(self):
@@ -830,7 +952,6 @@ class App():
 
     
     def attach_synth(self, synth):
-        #print(f"Attaching {synth}")
         if synth not in self.synths:
             self.synths.append(synth)
             self.bus.add_input(synth.output)
@@ -838,9 +959,9 @@ class App():
                 synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
                 synths_carousel.children = list(synths_carousel.children) + [synth.ui]
                 synth._ui.app = self
+        synth.app = self
 
     def detach_synth(self, synth):
-        #print(f"Detaching {synth}")
         if synth in self.synths:
             self.synths.remove(synth)
             self.bus.remove_input(synth.output)
@@ -848,28 +969,29 @@ class App():
                 synths_carousel = find_widget_by_tag(self.ui, "synths_carousel")
                 synths_carousel.children = [child for child in synths_carousel.children if child.tag != f"synth_{synth.id}"]
                 synth._ui.app = None
+        if getattr(synth, "app", None) is self:
+            synth.app = None
     
     def attach_feature(self, feature):
-        #print(f"Attaching {feature}")
         if feature not in self.features:
             self.features.append(feature)
-            feature.app = self
             if not self._headless:
                 features_carousel = find_widget_by_tag(self.ui, "features_carousel")
                 features_carousel.children = list(features_carousel.children) + [feature.ui]
                 feature._ui.app = self
+        feature.app = self
 
     def detach_feature(self, feature):
-        #print(f"Detaching {feature}")
         if feature in self.features:
             self.features.remove(feature)
             if not self._headless:
                 features_carousel = find_widget_by_tag(self.ui, "features_carousel")
                 features_carousel.children = [child for child in features_carousel.children if child.tag != f"feature_{feature.id}"]
                 feature._ui.app = None
+        if getattr(feature, "app", None) is self:
+            feature.app = None
     
     def attach_mapper(self, mapper):
-        #print(f"Attaching {mapper}")
         if mapper not in self.mappers:
             self.mappers.append(mapper)
             mapper._app = self
@@ -881,7 +1003,6 @@ class App():
             mapper()
 
     def detach_mapper(self, mapper):
-        #print(f"Detaching {mapper}")
         if mapper in self.mappers:
             self.mappers.remove(mapper)
             mapper._app = None
@@ -982,7 +1103,6 @@ class App():
             if len(self.display_normalization_high_percentile) not in [1, self.bg_hires.shape[2]]:
                 self.display_normalization_high_percentile = 100
                 print(f'Warning: Resetting display normalization high percentile to 100, because the provided list length does not match the number of channels ({self.bg_hires.shape[2]}).')
-
             # Redraw the background with the new image
             self.redraw_background()
 
@@ -1190,10 +1310,9 @@ class App():
             # For float, assume range is [0, 1] if not normalizing
             return (np.clip(img_data, 0, 1.0) * 255).astype(np.uint8)
 
-    
+
+    @ui_callback
     def redraw_background(self):
-        if self._headless:
-            return
         if not self._image_is_loaded:
             return
         self.bg_display, canvas = self._get_rendered_image_display(
@@ -1296,9 +1415,8 @@ class App():
         return mask_ids
 
 
+    @ui_callback
     def redraw_mask_display(self):
-        if self._headless:
-            return
         if self.nrt:
             return
         if not self._image_is_loaded:
@@ -1309,9 +1427,6 @@ class App():
         if not self.probe_with_mask:
             self.canvas[1].clear()
             return
-        # # escape if no mask is selected
-        # if self.selected_mask_ids.sum() == 0:
-        #     return
         self.canvas[1].clear()
         _, canvas = self._get_rendered_mask_display(
             self._get_hashable_mask_ids(self.selected_mask_ids),
@@ -1328,11 +1443,10 @@ class App():
         """Creates a hashable representation of a numpy array, handling object arrays."""
         if arr.dtype == object:
             # For object arrays, create a canonical string representation.
-            # This is generally faster than python-level iteration for large arrays.
             stringify = np.vectorize(lambda x: str(sorted(x)) if isinstance(x, list) else str(x))
             return ''.join(stringify(arr).flat)
         else:
-            # For numeric arrays, tobytes() is efficient and sufficient.
+            # For numeric arrays, use tobytes()
             return arr.tobytes()
 
 
@@ -1560,7 +1674,7 @@ class App():
         self.graph.start() # start the global graph
         self._draw_lock = False # disable draw lock
         self.start_compute_thread() # start the compute thread
-        self.draw() # trigger a draw to update the canvas and update mappings to where they where before the render
+        self.compute_and_draw() # trigger a draw to update the canvas and update mappings to where they where before the render
 
         return _output_buffer
 
@@ -1623,18 +1737,19 @@ class App():
                 timeline_frames[key][current_frame:next_frame] = np.linspace(current_val, next_val, n_frames)
 
         return timeline_frames
+    
 
+    def compute(self):
+        self.compute_event.set()
 
+    def compute_and_draw(self):
+        self.compute()
+        self.draw()
+
+    @ui_callback
     def draw(self):
         """Render new frames for all kernels, then update the HTML canvas with the results."""
         if self._draw_lock:
-            return
-
-        # Signal the compute thread to start processing
-        self.compute_event.set()
-
-        # Escape in headless mode
-        if self._headless:
             return
         
         # Clear the canvas
@@ -1655,11 +1770,19 @@ class App():
         probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
         probe_y_numbox.value = self.probe_y
 
+        # Flush pending UI (non-blocking, main thread)
+        now = time.perf_counter()
+        if now - self._last_ui_update_time > self._ui_flush_min_interval:
+            self._last_ui_update_time = now
+            for obj in chain(getattr(self, "features", []), getattr(self, "synths", [])):
+                if getattr(obj, "_pending_ui", False) and hasattr(obj, "update_ui_throttled"):
+                    obj.update_ui_throttled(force=False)
+
         # log probe params and unmuted state
         self._probe_x_on_last_draw = self._probe_x
         self._probe_y_on_last_draw = self._probe_y
-        self._probe_width_on_last_draw = self._probe_width
-        self._probe_height_on_last_draw = self._probe_height
+        self._probe_width_on_last_draw = self._probe_width.value
+        self._probe_height_on_last_draw = self._probe_height.value
         self._unmuted_on_last_draw = self._unmuted
 
 
@@ -1672,20 +1795,20 @@ class App():
             return # Skip if we are not following the idle mouse
 
         # Drop excess events over the refresh interval
-        current_time = time.time()
-        if current_time - self.last_draw_time < self._refresh_interval and pressed < 2: # only skip if mouse is up
+        current_time = time.perf_counter()
+        if current_time - self.last_draw_time < self._refresh_interval and pressed < 2: # only skip on mouse move, not on mouse down/up
             return  # Skip if we are processing too quickly
         self.last_draw_time = current_time  # Update the last event time
 
-        with hold_canvas(self.canvas):
+        with hold_canvas(self.canvas), self.hold_ui():
             # parse mouse event (double-click, click, release)
-            if pressed == 2:
+            if pressed == 2: # Mouse down
                 if current_time - self._last_mouse_down_time < 0.2:
                     self.mouse_btn = 2 # Double-click
                 else:
                     self.mouse_btn = 1 # Single-click
                 self._last_mouse_down_time = current_time
-            elif pressed == 3:
+            elif pressed == 3: # Mouse up
                 self.mouse_btn = 0
             # If in Select mode, we are either box-selecting the probe or adding/removing mask IDs
             if self.interaction_mode == "Select":
@@ -1733,7 +1856,7 @@ class App():
                     # redraw the mask display
                     self.redraw_mask_display()
                     # compute features and mappers
-                    self.compute_event.set()
+                    self.compute()
                 else: # box-select the probe
                     if self.mouse_btn == 0:
                         self._probe_box_select_start_xy = None # reset start xy
@@ -1754,7 +1877,7 @@ class App():
                             self._probe_x = new_x
                             self._probe_y = new_y
                             # draw and compute
-                            self.draw()
+                            self.compute_and_draw()
 
             else: # Hold or Toggle modes
                 # Update probe position without triggering a draw
@@ -1770,7 +1893,7 @@ class App():
                                 self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
                         else: # is single ID per channel/layer, then always update the selected IDs
                             self.selected_mask_ids = self.get_mask_ids_under_probe(x, y)
-                    self.draw()
+                    self.compute_and_draw()
 
 
     # GUI callbacks
@@ -1793,9 +1916,8 @@ class App():
             if not self._headless:
                 audio_switch.style.text_color = 'black'
 
+    @ui_callback
     def toggle_audio_btn(self, value: bool):
-        if self._headless:
-            return
         audio_switch = find_widget_by_tag(self.ui, "audio_switch")
         if value:
             audio_switch.disabled = False
@@ -1821,10 +1943,8 @@ class App():
     def set_master_volume(self):
         self.master_slider_db.set_value(self.master_volume)
 
+    @ui_callback
     def update_mask_ids_display(self):
-         # escape if in headless mode
-        if self._headless:
-            return
         # object type filters will always be used for selecting multiple IDs on the same channel or layer
         not_object_type = self.selected_mask_ids.dtype != object
         # in case the user provides a single ID, we can also show the numbox
@@ -1840,10 +1960,8 @@ class App():
         else:
             text.value = array2str(self.selected_mask_ids, keep_brackets=True)
 
+    @ui_callback
     def update_display_normalization_percentile_display(self, which: Literal['low', 'high']):
-        # escape if in headless mode
-        if self._headless:
-            return
         selected_prop_name = f'display_normalization_{which}_percentile'
         not_a_list = not isinstance(getattr(self, selected_prop_name), list)
         single_value = len(getattr(self, selected_prop_name)) == 1 if not not_a_list else False
@@ -2129,15 +2247,12 @@ class Mapper():
     
 
     def _map(self, frame=None):
-        t0 = time.perf_counter()
         # get the feature data from its buffer
         in_data = self.source_buffer.data
         mappings = self.map(in_data)
-        t1 = time.perf_counter()
 
         if self.clamp:
             mappings = self.clamp_mappings(mappings)
-        t2 = time.perf_counter()
 
         if not self.nrt:
             # if we are in real-time mode, set all targets parameters to the scaled values
@@ -2156,13 +2271,6 @@ class Mapper():
                 scaled_val = mappings[i]
                 target_output_buffer = self._output_buffers[i]
                 target_output_buffer.data[:, frame] = scaled_val[:, 0]
-        t3 = time.perf_counter()
-        self.timer = {
-            "map": t1 - t0,
-            "clamp": t2 - t1,
-            "set": t3 - t2,
-            "total": t3 - t0
-        }
 
     def __call__(self, frame=None):
         self._map(frame)

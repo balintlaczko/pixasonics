@@ -26,6 +26,11 @@ class Feature():
         self._name = None
         self._app = None
         self._id = None
+        # Data attrs
+        self._features = sf.Buffer(1, 1) # default to 1 feature/channel
+        self._num_features = 1
+        self._min = np.ones_like(self._features.data) * 1e6
+        self._max = np.ones_like(self._features.data) * -1e6
         # Call setters
         self.filter_rows = filter_rows
         self.filter_columns = filter_columns
@@ -35,12 +40,13 @@ class Feature():
         self.reduce_method = reduce_method
         self.name = name
         self.id = str(id(self))
-        # Init public attrs
-        self.features = sf.Buffer(1, 1) # default to 1 feature/channel
-        self.min = np.ones_like(self.features.data) * 1e6
-        self.max = np.ones_like(self.features.data) * -1e6
         # Create the UI card
         self.create_ui()
+        # UI throttling and caching
+        self.ui_update_interval = 0.05  # seconds; tune as needed (e.g., 0.05–0.2)
+        self._last_ui_update = 0.0
+        self._pending_ui = False
+        self._pending_updates = {} # param_name -> pending new value (for UI update)
 
     @property
     def id(self):
@@ -116,7 +122,8 @@ class Feature():
     @app.setter
     def app(self, app):
         self._app = app
-        self._process_image(app.bg_hires)
+        if app is not None:
+            self._process_image(app.image)
 
     @property
     def reduce_method(self):
@@ -149,9 +156,63 @@ class Feature():
     @property
     def reduce_axis(self):
         return tuple(i for i in range(4) if i != self.target_dim)
+    
+    @property
+    def features(self):
+        return self._features # sf.Buffer
+    
+    @features.setter
+    def features(self, features: np.ndarray):
+        # if masked turned into a normal array and fill masked values with zeros for comparison
+        if np.ma.is_masked(features):
+            features = features.filled(0)
+        changed = not np.allclose(self._features.data, features, rtol=1e-5, atol=1e-8)
+        if not changed:
+            return
+        self._features.data[:, :] = features
+        self._pending_ui = True
+        self._pending_updates['value'] = self._features.data
 
-    def __call__(self, mat):
-        t0 = time.perf_counter()
+    @property
+    def num_features(self):
+        return self._num_features
+    
+    @num_features.setter
+    def num_features(self, num_features: int):
+        changed = (self._num_features != num_features)
+        if not changed:
+            return
+        self._num_features = num_features
+        self._pending_ui = True
+        self._pending_updates['num_features'] = num_features
+
+    @property
+    def min(self):
+        return self._min
+    
+    @min.setter
+    def min(self, min: np.ndarray):
+        changed = not np.array_equal(self._min, min)
+        if not changed:
+            return
+        self._min = min
+        self._pending_ui = True
+        self._pending_updates['min'] = min
+
+    @property
+    def max(self):
+        return self._max
+    
+    @max.setter
+    def max(self, max: np.ndarray):
+        changed = not np.array_equal(self._max, max)
+        if not changed:
+            return
+        self._max = max
+        self._pending_ui = True
+        self._pending_updates['max'] = max
+
+    def __call__(self, mat: np.ndarray):
         mat_filtered = filter_matrix(
             mat,
             self.filter_rows,
@@ -159,26 +220,22 @@ class Feature():
             self.filter_channels,
             self.filter_layers
         )
-        t1 = time.perf_counter()
         computed = self.compute(mat_filtered)
-        t2 = time.perf_counter()
         # Here we need to assert that the computed shape is 1D (num_features,)
         assert len(computed.shape) == 1, f"Computed shape is not 1D: {computed.shape}"
         if computed.shape[0] != self.num_features:
             # self.initialize(mat_filtered)
             self.initialize(computed) # TODO: this means it will always take the local minmax
-        self.features.data[:, :] = computed[..., None] # add the sample dimension, so it is (num_features, 1)
-        t3 = time.perf_counter()
+        self.features = computed[..., None] # add the sample dimension, so it is (num_features, 1)
         self.update_minmax() # then we have to keep a running minmax
-        self.update_ui()
-        t4 = time.perf_counter()
-        self.timer = {
-            "filter": t1 - t0,
-            "compute": t2 - t1,
-            "update_features": t3 - t2,
-            "update_ui": t4 - t3,
-            "total": t4 - t0
-        }
+        self._pending_ui = True # and mark the UI as needing an update
+
+        # Ask the App to schedule a debounced UI flush on the UI thread
+        if getattr(self, "app", None) is not None:
+            try:
+                self.app.schedule_ui_flush()  # ~50ms debounce by default
+            except Exception:
+                pass
     
     def compute(self, mat):
         """Compute the feature from the matrix, override this method for custom computation.
@@ -214,7 +271,7 @@ class Feature():
         mat_processed = self.process_image(mat_filtered)
         
         self.initialize(mat_processed)
-        self.update_ui()
+        self.update_ui() # force immediate UI update
 
 
     def initialize(self, mat):
@@ -226,7 +283,7 @@ class Feature():
             self.min = np.min(mat)[..., None]
             self.max = np.max(mat)[..., None]
             self.num_features = mat.shape[0]
-        self.features = sf.Buffer(self.num_features, 1)
+        self._features = sf.Buffer(self.num_features, 1)
 
         
     def create_ui(self):
@@ -255,10 +312,35 @@ class Feature():
         self.max = np.maximum(self.max, self.features.data)
 
     def update_ui(self):
-        self._ui_min.value = array2str(self.min)
-        self._ui_max.value = array2str(self.max)
-        self._ui_value.value = array2str(self.features.data)
-        self._ui_num_features.value = str(self.num_features)
+        # Force an immediate UI flush (used where you really want it synchronous)
+        self.update_ui_throttled(force=True)
+
+    def update_ui_throttled(self, force: bool = False):
+        # If UI not created or we’re headless, skip
+        if not hasattr(self, "_ui_min") or self._ui_min is None:
+            return
+
+        now = time.perf_counter()
+        if not force:
+            if not self._pending_ui:
+                return
+            if (now - self._last_ui_update) < self.ui_update_interval:
+                return
+            
+        # Push cached values to widgets
+        for key, value in self._pending_updates.items():
+            if key == "min":
+                self._ui_min.value = array2str(value)
+            elif key == "max":
+                self._ui_max.value = array2str(value)
+            elif key == "value":
+                self._ui_value.value = array2str(value)
+            elif key == "num_features":
+                self._ui_num_features.value = int(value) # IntText expects int
+        
+        self._pending_ui = False
+        self._pending_updates = {}
+        self._last_ui_update = now
 
     def update(self):
         self.update_minmax()

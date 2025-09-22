@@ -1,13 +1,15 @@
 import numpy as np
 import signalflow as sf
 import json
-from .utils import broadcast_params, array2str, find_dict_with_entry, ParamSliderDebouncer
+from .utils import broadcast_params, array2str, find_dict_with_entry#, ParamSliderDebouncer
 from .ui import SynthCard, EnvelopeCard, find_widget_by_tag
 from typing import Dict, List
 import copy
+import time
+import threading
 
-PARAM_SLIDER_DEBOUNCE_TIME = 0.05
-PARAM_SMOOTHING_TIME = 0.01
+# PARAM_SLIDER_DEBOUNCE_TIME = 0.05
+PARAM_SMOOTHING_TIME = 0.05
 
 class Synth():
     def __init__(
@@ -25,6 +27,15 @@ class Synth():
         self.add_amplitude = add_amplitude
         self.add_panning = add_panning
         self.id = str(id(self))
+
+        # UI throttling and caching
+        self._ui_min_interval = 0.05  # seconds
+        self._last_ui_update = 0.0
+        self._pending_ui = False
+        self._pending_updates = {} # param_name -> pending new value (for UI update)
+        self._params2widgets = {} # param_name -> widget (for UI update)
+        self.app = None
+
         # generate params dict
         self.generate_params()
         # create param buffers, their players, smoothing, and the patch
@@ -32,7 +43,7 @@ class Synth():
         # create ui
         self.create_ui()
         # create param slider debouncer if necessary
-        self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+        # self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
 
     def generate_params(self):
         # check that there are keys for all params
@@ -123,14 +134,35 @@ class Synth():
     def set_input(self, name, value, from_slider=False):
         self.params[name]["buffer"].data[:, :] = value
         self.params[name]["value"] = value.tolist() if isinstance(value, np.ndarray) else value
-        if not from_slider and self.num_channels == 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.unobserve_all()
-            slider_value = value if self.num_channels == 1 else array2str(value)
-            self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
-        elif not from_slider and self.num_channels > 1:
-            slider = find_widget_by_tag(self.ui, name)
-            slider.value = array2str(value)
+
+        # Cache last value for UI reflection
+        if not from_slider:
+            self._pending_updates[name] = value
+
+        # 2) UI side-effects depending on thread
+        on_main_thread = threading.current_thread() is threading.main_thread()
+
+        if not on_main_thread:
+            # Called from compute thread: mark pending, schedule UI flush, and skip direct widget ops
+            self._pending_ui = True
+            if getattr(self, "app", None) is not None:
+                try:
+                    self.app.schedule_ui_flush()
+                except Exception:
+                    pass
+            return
+
+        # Called from main/UI thread: update widget directly (if not from_slider)
+        if not from_slider:
+            slider = self._params2widgets.get(name, None)
+            if slider is not None:
+                if self.num_channels == 1:
+                    slider.unobserve_all()
+                    slider_value = value if self.num_channels == 1 else array2str(value)
+                    # self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
+                    self.update_slider(slider, slider_value)
+                elif self.num_channels > 1:
+                    slider.value = array2str(value)
 
     def update_slider(self, slider, value):
         slider.unobserve_all()
@@ -142,6 +174,34 @@ class Synth():
                     from_slider=True
                 ), 
                 names="value")
+        
+    def update_ui_throttled(self, force: bool = False):
+        """
+        Apply cached input value to the UI with throttling.
+        Runs on the main/UI thread (called by App.draw()/flush_ui()).
+        """
+        now = time.perf_counter()
+        if not force: 
+            if not self._pending_ui:
+                return
+            if (now - self._last_ui_update) < self._ui_min_interval:
+                return
+
+        # Push cached values to widgets
+        for key, value in self._pending_updates.items():
+            slider = self._params2widgets.get(key, None)
+            if slider is not None:
+                if self.num_channels == 1:
+                    slider.unobserve_all()
+                    slider_value = value if self.num_channels == 1 else array2str(value)
+                    # self.debouncer.submit(key, lambda: self.update_slider(slider, slider_value))
+                    self.update_slider(slider, slider_value)
+                else:
+                    slider.value = array2str(value)
+
+        self._pending_ui = False
+        self._pending_updates = {} # clear cache (only changed values are cached)
+        self._last_ui_update = now
 
     def reset_to_default(self):
         for param in self.params:
@@ -158,6 +218,12 @@ class Synth():
             num_channels=self.num_channels
         )
         self._ui.synth = self
+
+        # save widgets for direct updates
+        for param_name in self.params.keys():
+            widget = find_widget_by_tag(self.ui, param_name)
+            if widget is not None:
+                self._params2widgets[param_name] = widget
 
     @property
     def ui(self):

@@ -298,7 +298,7 @@ class Timer:
         self._cancel_event = threading.Event()
 
     def start(self):
-        self._start_time = time.time()
+        self._start_time = time.perf_counter()
         self._manager.add_timer(self)
 
     def cancel(self):
@@ -312,7 +312,7 @@ class Timer:
     def remaining_time(self):
         if self._start_time is None:
             return float('inf')
-        elapsed = time.time() - self._start_time
+        elapsed = time.perf_counter() - self._start_time
         return max(0, self._timeout - elapsed)
 
     def execute(self):
