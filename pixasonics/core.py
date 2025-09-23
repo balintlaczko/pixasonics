@@ -93,6 +93,7 @@ class App():
         self._ui_flush_min_interval = 0.1  # seconds
         self._last_ui_update_time = 0.0  # timestamp of last flush
         self._ui_loop = None  # will hold the UI asyncio loop
+        self._ui_widget_refs = {} # references to (frequently updated) UI widgets (to avoid repeated DOM searches)
 
         # Global state variables
         self.is_drawing = False
@@ -1765,11 +1766,16 @@ class App():
                 int(self.probe_height))
         
         # update the probe_x and probe_y values in the UI
-        probe_x_numbox = find_widget_by_tag(self.ui, "probe_x")
+        probe_x_numbox = self._ui_widget_refs.get("probe_x", None)
+        if probe_x_numbox is None:
+            probe_x_numbox = find_widget_by_tag(self.ui, "probe_x")
+            self._ui_widget_refs["probe_x"] = probe_x_numbox
         probe_x_numbox.value = self.probe_x
-        probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
+        probe_y_numbox = self._ui_widget_refs.get("probe_y", None)
+        if probe_y_numbox is None:
+            probe_y_numbox = find_widget_by_tag(self.ui, "probe_y")
+            self._ui_widget_refs["probe_y"] = probe_y_numbox
         probe_y_numbox.value = self.probe_y
-
         # Flush pending UI (non-blocking, main thread)
         now = time.perf_counter()
         if now - self._last_ui_update_time > self._ui_flush_min_interval:
@@ -1950,10 +1956,16 @@ class App():
         # in case the user provides a single ID, we can also show the numbox
         single_id = self.selected_mask_ids.size == 1
         numbox_condition = (not_object_type and single_id)
-         # show either the numbox or the text field
-        numbox = find_widget_by_tag(self.ui, "selected_mask_id")
+        # show either the numbox or the text field
+        numbox = self._ui_widget_refs.get("selected_mask_id", None) # get from cache
+        if numbox is None:
+            numbox = find_widget_by_tag(self.ui, "selected_mask_id")
+            self._ui_widget_refs["selected_mask_id"] = numbox # cache it
         numbox.layout.display = "flex" if numbox_condition else "none"
-        text = find_widget_by_tag(self.ui, "selected_mask_ids")
+        text = self._ui_widget_refs.get("selected_mask_ids", None) # get from cache
+        if text is None:
+            text = find_widget_by_tag(self.ui, "selected_mask_ids")
+            self._ui_widget_refs["selected_mask_ids"] = text # cache it
         text.layout.display = "none" if numbox_condition else "flex"
         if numbox_condition:
             numbox.value = self.selected_mask_ids[0, 0]
@@ -1967,9 +1979,15 @@ class App():
         single_value = len(getattr(self, selected_prop_name)) == 1 if not not_a_list else False
         slider_condition = not_a_list or single_value
         # show either the slider or the text field
-        slider = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_slider")
+        slider = self._ui_widget_refs.get(f"display_normalization_{which}_percentile_slider", None) # get from cache
+        if slider is None:
+            slider = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_slider")
+            self._ui_widget_refs[f"display_normalization_{which}_percentile_slider"] = slider # cache it
+        text = self._ui_widget_refs.get(f"display_normalization_{which}_percentile_text", None) # get from cache
+        if text is None:
+            text = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_text")
+            self._ui_widget_refs[f"display_normalization_{which}_percentile_text"] = text # cache it
         slider.layout.display = "flex" if slider_condition else "none"
-        text = find_widget_by_tag(self.ui, f"display_normalization_{which}_percentile_text")
         text.layout.display = "none" if slider_condition else "flex"
         if slider_condition:
             slider.value = getattr(self, selected_prop_name)[0]
