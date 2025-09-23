@@ -522,7 +522,11 @@ class App():
     
     @probe_x.setter
     def probe_x(self, value):
-        self._probe_x = self.clamp_probe_x(value)
+        value = self.clamp_probe_x(value)
+        changed = value != self._probe_x
+        if not changed:
+            return
+        self._probe_x = value
         if self.probe_with_mask:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
@@ -534,7 +538,11 @@ class App():
     
     @probe_y.setter
     def probe_y(self, value):
-        self._probe_y = self.clamp_probe_y(value)
+        value = self.clamp_probe_y(value)
+        changed = value != self._probe_y
+        if not changed:
+            return
+        self._probe_y = value
         if self.probe_with_mask:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
@@ -542,9 +550,11 @@ class App():
 
     def update_probe_xy(self):
         # Apply the clamped probe position without triggering a draw
+        old_probe_x, old_probe_y = self._probe_x, self._probe_y
         self._probe_x = self.clamp_probe_x(self.probe_x)
         self._probe_y = self.clamp_probe_y(self.probe_y)
-        if self.probe_with_mask:
+        changed = (self._probe_x != old_probe_x) or (self._probe_y != old_probe_y)
+        if self.probe_with_mask and changed:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.compute_and_draw()
@@ -1700,10 +1710,10 @@ class App():
     def standardize_timeline(self, timeline):
         """Fill in missing values in the timeline with the previous values."""
         latest_setting = {
-            "probe_width": 1,
-            "probe_height": 1,
-            "probe_x": 0,
-            "probe_y": 0,
+            "probe_width": int(self.probe_width),
+            "probe_height": int(self.probe_height),
+            "probe_x": int(self.probe_x),
+            "probe_y": int(self.probe_y),
         }
         new_timeline = []
         for timepoint, settings in timeline:
