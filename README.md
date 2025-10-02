@@ -87,3 +87,26 @@ There are a few "breakout" doors designed to integrate pixasonics in your existi
 # How to contribute
 
 If you encounter any funky behavior, please open an [issue](https://github.com/balintlaczko/pixasonics/issues)!
+
+# How to cite
+
+[Link to paper](https://nva.sikt.no/registration/019991f1e253-5f91e1b2-b210-4b65-b440-3cb6bbd14965)
+
+## APA
+
+```
+Laczkó, B., & Jensenius, A. R. (2025). Pixasonics: An Image Sonification Toolbox for Python. Proceedings of the 30th International Conference on Auditory Display (ICAD 2025). The 30th International Conference on Auditory Display (ICAD 2025), Coimbra, Portugal.
+```
+
+## BibTeX
+
+```
+@inproceedings{laczkoPixasonicsImageSonification2025,
+	address = {Coimbra, Portugal},
+	title = {Pixasonics: {An} {Image} {Sonification} {Toolbox} for {Python}},
+	booktitle = {Proceedings of the 30th {International} {Conference} on {Auditory} {Display} ({ICAD} 2025)},
+	publisher = {The International Community for Auditory Display},
+	author = {Laczkó, Bálint and Jensenius, Alexander Refsum},
+	year = {2025},
+}
+```
