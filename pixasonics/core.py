@@ -147,6 +147,7 @@ class App():
         self._mask_layers = -1
         self._highest_mask_id = 0
         self._displayed_mask_bbox = (0, 0, 0, 0) # y1, x1, y2, x2
+        self._cached_mask_result = None
         self._headless = headless
         self._draw_lock = False # True disables self.draw()
         self._hold_ui = False # True holds all draw calls and ui updates until hold_ui is set to False again
@@ -177,6 +178,69 @@ class App():
         self.start_compute_thread()
 
         AppRegistry().register(self)
+
+    # class-level constant for timeline keys (used in NRT timeline generation)
+    TIMELINE_KEYS = {
+        "probe_width": {
+            "type": int,
+            "can_interp": True
+        },
+        "probe_height": {
+            "type": int,
+            "can_interp": True
+        },
+        "probe_x": {
+            "type": int,
+            "can_interp": True
+        },
+        "probe_y": {
+            "type": int,
+            "can_interp": True
+        },
+        "filter_probe_by_channel_offset": {
+            "type": bool,
+            "can_interp": False
+        },
+        "filter_probe_by_layer_offset": {
+            "type": bool,
+            "can_interp": False
+        },
+        "display_channel_offset": {
+            "type": int,
+            "can_interp": True
+        },
+        "display_layer_offset": {
+            "type": int,
+            "can_interp": True
+        },
+        "probe_with_mask": {
+            "type": bool,
+            "can_interp": False
+        },
+        "selected_mask_ids": {
+            "type": None, # this means values won't be cast in the timeline rendering
+            "can_interp": False
+        },
+
+    }
+
+    # helper method to check types
+    @staticmethod
+    def _typecheck(name, value, expected_type):
+        """Raise TypeError if value is not of expected_type.
+        
+        Args:
+            name: The property name (for the error message).
+            value: The value to check.
+            expected_type: A type or tuple of types to check against.
+        """
+        if not isinstance(value, expected_type):
+            if isinstance(expected_type, tuple):
+                expected = " or ".join(t.__name__ for t in expected_type)
+            else:
+                expected = expected_type.__name__
+            raise TypeError(f"{name} must be {expected}, got {type(value).__name__}")
+
 
     @contextmanager
     def hold_ui(self):
@@ -215,6 +279,7 @@ class App():
     
     @fps.setter
     def fps(self, value):
+        self._typecheck("fps", value, int)
         self._fps = value
         self._refresh_interval = 1 / value
 
@@ -224,6 +289,7 @@ class App():
     
     @normalize_display.setter
     def normalize_display(self, value):
+        self._typecheck("normalize_display", value, bool)
         self._normalize_display.value = value
         self.redraw_background()
 
@@ -233,19 +299,38 @@ class App():
     
     @normalize_display_global.setter
     def normalize_display_global(self, value):
+        self._typecheck("normalize_display_global", value, bool)
         self._normalize_display_global.value = value
         self.redraw_background()
     
     def _display_normalization_setter_typecheck(self, value, which: Literal['low', 'high']):
+        """Validate and normalize the value for display normalization percentile setters.
+
+        Accepts an int, float, or list of numbers and converts it to a list of floats.
+        If a list is provided, its length must be either 1 (applied to all channels)
+        or equal to the number of channels in the loaded image.
+
+        Args:
+            value: The value to validate. Must be an int, float, or list of numbers.
+            which: Which percentile is being set, either 'low' or 'high'. Used in error messages.
+
+        Returns:
+            list[float]: The validated value as a list of floats.
+
+        Raises:
+            TypeError: If the value is not an int, float, or list.
+            ValueError: If the list length is not 1 or equal to the number of image channels.
+        """
         # only accept int, float and list
         if isinstance(value, (int, float)):
             value = [float(value)]
         elif isinstance(value, list):
             # check that list length is 1 or equal to number of channels
-            assert len(value) in [1, self.bg_hires.shape[2]], f"Invalid length for display_normalization_{which}_percentile list. Expected 1 or {self.bg_hires.shape[2]}, got {len(value)}."
+            if len(value) not in [1, self.bg_hires.shape[2]]:
+                raise ValueError(f"Invalid length for display_normalization_{which}_percentile list. Expected 1 or {self.bg_hires.shape[2]}, got {len(value)}.")
             value = [float(v) for v in value] # convert to float
         else:
-            raise ValueError(f"Invalid value for display_normalization_{which}_percentile. Expected int, float, or list.")
+            raise TypeError(f"Invalid value for display_normalization_{which}_percentile. Expected int, float, or list.")
         return value
     
     @property
@@ -286,6 +371,7 @@ class App():
     
     @maximum_displayed_channels.setter
     def maximum_displayed_channels(self, value):
+        self._typecheck("maximum_displayed_channels", value, int)
         value = int(np.clip(value, 1, 3))
         changed = value != self._maximum_displayed_channels.value
         self._maximum_displayed_channels.value = value
@@ -302,6 +388,7 @@ class App():
     
     @display_channel_offset.setter
     def display_channel_offset(self, value):
+        self._typecheck("display_channel_offset", value, int)
         value = int(np.clip(value, 0, max(0, self.bg_hires.shape[2]-1)))
         self._display_channel_offset.value = value
         self._display_channel_or_layer_offset_callbacks()
@@ -312,11 +399,14 @@ class App():
     
     @display_layer_offset.setter
     def display_layer_offset(self, value):
+        self._typecheck("display_layer_offset", value, int)
         value = int(np.clip(value, 0, max(0, self.bg_hires.shape[3]-1)))
         self._display_layer_offset.value = value
         self._display_channel_or_layer_offset_callbacks()
 
     def _display_channel_or_layer_offset_callbacks(self):
+        if self._nrt:
+            return
         if self.filter_probe_by_layer_offset or self.filter_probe_by_channel_offset:
             self.compute()
         self.redraw_background()
@@ -328,9 +418,10 @@ class App():
     
     @filter_probe_by_channel_offset.setter
     def filter_probe_by_channel_offset(self, value):
+        self._typecheck("filter_probe_by_channel_offset", value, bool)
         changed = value != self._filter_probe_by_channel_offset.value
         self._filter_probe_by_channel_offset.value = value
-        if changed:
+        if changed and not self._nrt:
             self.compute()
 
     @property
@@ -339,9 +430,10 @@ class App():
 
     @filter_probe_by_layer_offset.setter
     def filter_probe_by_layer_offset(self, value):
+        self._typecheck("filter_probe_by_layer_offset", value, bool)
         changed = value != self._filter_probe_by_layer_offset.value
         self._filter_probe_by_layer_offset.value = value
-        if changed:
+        if changed and not self._nrt:
             self.compute()
 
     @property
@@ -358,6 +450,7 @@ class App():
     
     @nrt.setter
     def nrt(self, value):
+        self._typecheck("nrt", value, bool)
         changed = value != self._nrt
         self._nrt = value
         if changed:
@@ -376,6 +469,7 @@ class App():
     
     @probe_follows_idle_mouse.setter
     def probe_follows_idle_mouse(self, value):
+        self._typecheck("probe_follows_idle_mouse", value, bool)
         self._probe_follows_idle_mouse.value = value
 
     @property
@@ -384,18 +478,22 @@ class App():
 
     @probe_with_mask.setter
     def probe_with_mask(self, value):
+        self._typecheck("probe_with_mask", value, bool)
         # if no mask is loaded keep it off
         if not self._mask_is_loaded:
             value = False
         changed = value != self._probe_with_mask.value
         self._probe_with_mask.value = value
         if changed:
+            self._cached_mask_result = None  # invalidate cache
+        if changed and not self._nrt:
             self._probe_with_mask_callbacks()
 
     @ui_callback
     def _probe_with_mask_callbacks(self):
             self._selected_mask_ids.value = self.get_mask_ids_under_probe() # don't trigger setter
             self.redraw_mask_display()
+            self.update_mask_ids_display()
             self.compute_and_draw()
             # enable/disable selected mask ID numbox on UI
             numbox_selected_mask_id = find_widget_by_tag(self.ui, "selected_mask_id")
@@ -416,6 +514,7 @@ class App():
 
     @same_mask_ids_across_channels.setter
     def same_mask_ids_across_channels(self, value):
+        self._typecheck("same_mask_ids_across_channels", value, bool)
         self._same_mask_ids_across_channels.value = value
         self._same_mask_ids_across_channels_or_layers_callbacks()
 
@@ -425,6 +524,7 @@ class App():
 
     @same_mask_ids_across_layers.setter
     def same_mask_ids_across_layers(self, value):
+        self._typecheck("same_mask_ids_across_layers", value, bool)
         self._same_mask_ids_across_layers.value = value
 
     @property
@@ -433,6 +533,9 @@ class App():
 
     @selected_mask_ids.setter
     def selected_mask_ids(self, value):
+        # ignore if no mask is loaded
+        if not self._mask_is_loaded:
+            return
         # if None, set to a 2D zero array
         set_to_none = False
         if value is None:
@@ -466,7 +569,7 @@ class App():
                 if value.dtype == object:
                     for elem in value.flat:
                         if not isinstance(elem, (list, int)):
-                            raise ValueError(f"Invalid element type in object array. Expected list or int, got {type(elem)}.")
+                            raise TypeError(f"Invalid element type in object array. Expected list or int, got {type(elem)}.")
             # do not allow more than 2D
             elif np.ndim(value) > 2:
                 raise ValueError(f"Invalid array shape. Expected up-to 2D array, got {np.ndim(value)}D")
@@ -475,10 +578,14 @@ class App():
             value = value if value.sum() != 0 else self._selected_mask_ids.value
         changed = not np.array_equal(value, self._selected_mask_ids.value)
         self._selected_mask_ids.value = value
+        if changed:
+            self._cached_mask_result = None  # invalidate cache
         if changed or self._unmuted_changed:
             self._selected_mask_ids_callbacks()
 
     def _selected_mask_ids_callbacks(self):
+        if self._nrt:
+            return
         self.update_mask_ids_display()
         self.redraw_mask_display()
         self.compute_and_draw()
@@ -522,12 +629,13 @@ class App():
     
     @probe_x.setter
     def probe_x(self, value):
+        self._typecheck("probe_x", value, (int, float))
         value = self.clamp_probe_x(value)
         changed = value != self._probe_x
         if not changed:
             return
         self._probe_x = value
-        if self.probe_with_mask:
+        if self.probe_with_mask and not self._nrt:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.compute_and_draw()
@@ -538,12 +646,13 @@ class App():
     
     @probe_y.setter
     def probe_y(self, value):
+        self._typecheck("probe_y", value, (int, float))
         value = self.clamp_probe_y(value)
         changed = value != self._probe_y
         if not changed:
             return
         self._probe_y = value
-        if self.probe_with_mask:
+        if self.probe_with_mask and not self._nrt:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.compute_and_draw()
@@ -554,7 +663,7 @@ class App():
         self._probe_x = self.clamp_probe_x(self.probe_x)
         self._probe_y = self.clamp_probe_y(self.probe_y)
         changed = (self._probe_x != old_probe_x) or (self._probe_y != old_probe_y)
-        if self.probe_with_mask and changed:
+        if self.probe_with_mask and changed and not self._nrt:
             self.selected_mask_ids = self.get_mask_ids_under_probe()
         if not self._nrt:
             self.compute_and_draw()
@@ -565,6 +674,7 @@ class App():
     
     @mouse_btn.setter
     def mouse_btn(self, value):
+        self._typecheck("mouse_btn", value, int)
         self._mouse_btn = value
         if self.interaction_mode == "Hold":
             self.unmuted = value > 0
@@ -577,6 +687,7 @@ class App():
     
     @probe_width.setter
     def probe_width(self, value):
+        self._typecheck("probe_width", value, int)
         self._probe_width.value = value
         # Update mouse xy to keep it in the middle of the probe
         self.update_probe_xy()
@@ -587,6 +698,7 @@ class App():
     
     @probe_height.setter
     def probe_height(self, value):
+        self._typecheck("probe_height", value, int)
         self._probe_height.value = value
         # Update mouse xy to keep it in the middle of the probe
         self.update_probe_xy()
@@ -606,6 +718,7 @@ class App():
     
     @master_volume.setter
     def master_volume(self, value):
+        self._typecheck("master_volume", value, (int, float))
         self._master_volume.value = value
         self.set_master_volume()
 
@@ -615,6 +728,7 @@ class App():
     
     @audio.setter
     def audio(self, value):
+        self._typecheck("audio", value, bool)
         self._audio.value = value
         self.toggle_dsp()
 
@@ -624,6 +738,7 @@ class App():
     
     @recording.setter
     def recording(self, value):
+        self._typecheck("recording", value, bool)
         self._recording.value = value
         self.toggle_record()
 
@@ -633,6 +748,7 @@ class App():
     
     @recording_path.setter
     def recording_path(self, value):
+        self._typecheck("recording_path", value, str)
         if not value.endswith(".wav"):
             value = value + ".wav"
         # only update if the value is different
@@ -645,6 +761,7 @@ class App():
     
     @unmuted.setter
     def unmuted(self, value):
+        self._typecheck("unmuted", value, bool)
         changed = value != self._unmuted
         self._unmuted = value
         if value:
@@ -691,6 +808,7 @@ class App():
     
     @interaction_mode.setter
     def interaction_mode(self, value):
+        self._typecheck("interaction_mode", value, str)
         if value.capitalize() not in ["Hold", "Toggle", "Select"]:
             raise ValueError("Invalid interaction mode. Expected one of: 'Hold', 'Toggle', 'Select'.")
         self._interaction_mode.value = value.capitalize()
@@ -1483,6 +1601,43 @@ class App():
         return mask_display, canvas
 
 
+    def _compute_mask_arrays(self):
+        """Compute and cache the mask arrays for the current selected_mask_ids."""
+        if self.selected_mask_ids.ndim == 1:
+            selected_mask = np.isin(self.mask, self.selected_mask_ids)
+        elif self.selected_mask_ids.ndim == 2:
+            if self.selected_mask_ids.dtype != object:
+                selected_mask = (self.mask == self.selected_mask_ids)
+            else:
+                selected_mask = np.zeros_like(self.mask, dtype=bool)
+                selected_mask_ids_broadcasted = np.broadcast_to(self.selected_mask_ids, (self._mask_channels, self._mask_layers))
+                for chan in range(self._mask_channels):
+                    for layer in range(self._mask_layers):
+                        ids = selected_mask_ids_broadcasted[chan, layer]
+                        if ids:
+                            mask_slice = self.mask[:, :, chan, layer]
+                            selected_mask[:, :, chan, layer] = np.isin(mask_slice, ids)
+        else:
+            raise ValueError("selected_mask_ids must be 1D or 2D array")
+
+        unselected_mask = (~selected_mask) | (self.mask == 0)
+        unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
+
+        # precompute bounding box
+        active_2d = np.any(~unselected_mask_broadcasted, axis=(2, 3))
+        rows = np.where(active_2d.any(axis=1))[0]
+        cols = np.where(active_2d.any(axis=0))[0]
+        if rows.size > 0 and cols.size > 0:
+            bbox = (rows[0], rows[-1] + 1, cols[0], cols[-1] + 1)
+        else:
+            bbox = None
+
+        self._cached_mask_result = {
+            "unselected_mask_broadcasted": unselected_mask_broadcasted,
+            "bbox": bbox
+        }
+
+
     def get_probe_matrix(self) -> np.ndarray:
         """
         Get the probe matrix from the background image.
@@ -1497,33 +1652,43 @@ class App():
             np.ndarray: The probe matrix.
         """
         if self.probe_with_mask and self._mask_is_loaded:
-            if self.selected_mask_ids.ndim == 1:
-                selected_mask = np.isin(self.mask, self.selected_mask_ids)
-            elif self.selected_mask_ids.ndim == 2:
-                if self.selected_mask_ids.dtype != object:
-                    selected_mask = (self.mask == self.selected_mask_ids)
-                else:
-                    selected_mask = np.zeros_like(self.mask, dtype=bool)
-                    selected_mask_ids_broadcasted = np.broadcast_to(self.selected_mask_ids, (self._mask_channels, self._mask_layers))
-                    for chan in range(self._mask_channels):
-                        for layer in range(self._mask_layers):
-                            ids = selected_mask_ids_broadcasted[chan, layer]
-                            if ids:
-                                mask_slice = self.mask[:, :, chan, layer]
-                                selected_mask[:, :, chan, layer] = np.isin(mask_slice, ids)
-            else:
-                raise ValueError("selected_mask_ids must be 1D or 2D array")
-            unselected_mask = (~selected_mask) | (self.mask == 0)
-            unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
-            probe = np.ma.masked_array(self.bg_hires, mask=unselected_mask_broadcasted)
-            # crop H and W to the bounding box of the selected mask
-            active_2d = np.any(~unselected_mask_broadcasted, axis=(2, 3))
-            rows = np.where(active_2d.any(axis=1))[0]
-            cols = np.where(active_2d.any(axis=0))[0]
-            if rows.size > 0 and cols.size > 0:
-                y_min, y_max = rows[0], rows[-1] + 1
-                x_min, x_max = cols[0], cols[-1] + 1
+        #     if self.selected_mask_ids.ndim == 1:
+        #         selected_mask = np.isin(self.mask, self.selected_mask_ids)
+        #     elif self.selected_mask_ids.ndim == 2:
+        #         if self.selected_mask_ids.dtype != object:
+        #             selected_mask = (self.mask == self.selected_mask_ids)
+        #         else:
+        #             selected_mask = np.zeros_like(self.mask, dtype=bool)
+        #             selected_mask_ids_broadcasted = np.broadcast_to(self.selected_mask_ids, (self._mask_channels, self._mask_layers))
+        #             for chan in range(self._mask_channels):
+        #                 for layer in range(self._mask_layers):
+        #                     ids = selected_mask_ids_broadcasted[chan, layer]
+        #                     if ids:
+        #                         mask_slice = self.mask[:, :, chan, layer]
+        #                         selected_mask[:, :, chan, layer] = np.isin(mask_slice, ids)
+        #     else:
+        #         raise ValueError("selected_mask_ids must be 1D or 2D array")
+        #     unselected_mask = (~selected_mask) | (self.mask == 0)
+        #     unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
+
+            # use cached mask computation if available
+            if self._cached_mask_result is None:
+                self._compute_mask_arrays()
+
+            cached = self._cached_mask_result
+            probe = np.ma.masked_array(self.bg_hires, mask=cached["unselected_mask_broadcasted"])
+            bbox = cached["bbox"]
+            if bbox is not None:
+                y_min, y_max, x_min, x_max = bbox
                 probe = probe[y_min:y_max, x_min:x_max]
+            # # crop H and W to the bounding box of the selected mask
+            # active_2d = np.any(~unselected_mask_broadcasted, axis=(2, 3))
+            # rows = np.where(active_2d.any(axis=1))[0]
+            # cols = np.where(active_2d.any(axis=0))[0]
+            # if rows.size > 0 and cols.size > 0:
+            #     y_min, y_max = rows[0], rows[-1] + 1
+            #     x_min, x_max = cols[0], cols[-1] + 1
+            #     probe = probe[y_min:y_max, x_min:x_max]
         else:
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
@@ -1621,10 +1786,11 @@ class App():
         self._nrt_prev = self._nrt # save current nrt state for later
         self._audio_prev = self.audio # save current audio state for later
         self._unmuted_prev = self.unmuted # save current unmuted state for later
-        probe_x_prev = self.probe_x
-        probe_y_prev = self.probe_y
-        probe_width_prev = self.probe_width
-        probe_height_prev = self.probe_height
+        # probe_x_prev = self.probe_x
+        # probe_y_prev = self.probe_y
+        # probe_width_prev = self.probe_width
+        # probe_height_prev = self.probe_height
+        prev_state = {key: getattr(self, key) for key in self.TIMELINE_KEYS.keys()}
         # stop compute thread
         self.stop_compute_thread()
         # enable draw lock
@@ -1641,7 +1807,9 @@ class App():
         # step 2: initialize mappings & synths to the first frame 
         # This is to avoid starting with an interpolation from wherever the Probe was before calling the render.
         # Also to set the master envelope to 0
-        first_frame_settings = {key: val[0] for key, val in timeline_frames.items()}
+        first_frame_settings = {key: val[0] for key, val in timeline_frames["interpolatable"].items()} # first the interpolatable
+        if 0 in timeline_frames["events"]: # then the events
+            first_frame_settings = {**first_frame_settings, **timeline_frames["events"][0]} # combine the two
         # apply settings from first frame
         self.render_frame(None, first_frame_settings) # trigger all mappings based on the Probe matrix of the first frame
         self.audio = True # put audio on the graph
@@ -1657,7 +1825,10 @@ class App():
         self.graph.render_to_new_buffer(1) # "sync" the graph
         # render the timeline (record mappings for each frame)
         for frame in range(self._render_nframes):
-            frame_settings = {key: val[frame] for key, val in timeline_frames.items()}
+            # first fetch the interpolatable keys' settings
+            frame_settings = {key: val[frame] for key, val in timeline_frames["interpolatable"].items()}
+            if frame in timeline_frames["events"]: # then the events
+                frame_settings = {**frame_settings, **timeline_frames["events"][frame]} # combine the two
             self.render_frame(frame, frame_settings)
         self.audio = True # put audio on the graph
         self.master_envelope.set_input("gate", 1) # start the env
@@ -1677,10 +1848,12 @@ class App():
         self.audio = self._audio_prev
         self.unmuted = self._unmuted_prev
         # restore the Probe state
-        self.probe_width = probe_width_prev
-        self.probe_height = probe_height_prev
-        self.probe_x = probe_x_prev
-        self.probe_y = probe_y_prev
+        # self.probe_width = probe_width_prev
+        # self.probe_height = probe_height_prev
+        # self.probe_x = probe_x_prev
+        # self.probe_y = probe_y_prev
+        for key in self.TIMELINE_KEYS.keys():
+            setattr(self, key, prev_state[key])
         AppRegistry().notify_resume(self) # notify other apps to resume their audio
         self.graph.start() # start the global graph
         self._draw_lock = False # disable draw lock
@@ -1691,11 +1864,19 @@ class App():
 
 
     def render_frame(self, frame, settings):
-        # set the app to the settings
-        self.probe_x = settings["probe_x"]
-        self.probe_y = settings["probe_y"]
-        self.probe_width = settings["probe_width"]
-        self.probe_height = settings["probe_height"]
+        # set the app to the settings, casting to the expected type
+
+        # self.probe_x = settings["probe_x"]
+        # self.probe_y = settings["probe_y"]
+        # self.probe_width = settings["probe_width"]
+        # self.probe_height = settings["probe_height"]
+
+        for key in settings.keys():
+            meta = self.TIMELINE_KEYS.get(key, None)
+            val = settings[key]
+            if meta["type"] is not None:
+                val = meta["type"](val)
+            setattr(self, key, val)
 
         # Get probe matrix
         probe_mat = self.get_probe_matrix()
@@ -1708,44 +1889,86 @@ class App():
 
 
     def standardize_timeline(self, timeline):
-        """Fill in missing values in the timeline with the previous values."""
-        latest_setting = {
-            "probe_width": int(self.probe_width),
-            "probe_height": int(self.probe_height),
-            "probe_x": int(self.probe_x),
-            "probe_y": int(self.probe_y),
-        }
+        """Fill in missing values in the timeline with the previous values, and sort the timeline by timepoint."""
+        latest_setting = {}
+        for key, meta in self.TIMELINE_KEYS.items():
+            val = getattr(self, key)
+            if meta["type"] is not None:
+                val = meta["type"](val)
+            latest_setting[key] = val
+        sorted_timeline = sorted(timeline, key=lambda x: x[0]) # sort by timepoint
         new_timeline = []
-        for timepoint, settings in timeline:
+        for timepoint, settings in sorted_timeline:
             new_settings = {**latest_setting, **settings}
             new_timeline.append((timepoint, new_settings))
             latest_setting = new_settings
         return new_timeline
+    
+
+    def _separate_interpolatable_from_events(self, timeline):
+        """Separate the timeline into interpolatable keys and event keys."""
+        interpolatable_keys = [key for key, meta in self.TIMELINE_KEYS.items() if meta["can_interp"]]
+        event_keys = [key for key, meta in self.TIMELINE_KEYS.items() if not meta["can_interp"]]
+        timeline_interpolatable = []
+        timeline_events = []
+        for timepoint, settings in timeline:
+            interp_settings = {key: val for key, val in settings.items() if key in interpolatable_keys}
+            event_settings = {key: val for key, val in settings.items() if key in event_keys}
+            timeline_interpolatable.append((timepoint, interp_settings))
+            timeline_events.append((timepoint, event_settings))
+        return timeline_interpolatable, timeline_events
+    
+
+    def _filter_timeline_keys(self, timeline):
+        """Filter the timeline to only include keys that are in the timeline keys."""
+        filtered_timeline = []
+        for timepoint, settings in timeline:
+            filtered_settings = {key: val for key, val in settings.items() if key in self.TIMELINE_KEYS.keys()}
+            filtered_timeline.append((timepoint, filtered_settings))
+        return filtered_timeline
 
 
     def generate_timeline_frames(self, timeline, num_frames, fps):
-        # initialize the timeline arrays
+        # initialize the timeline arrays for interpolatable keys
         timeline_frames = {
-            "probe_width": np.zeros(num_frames),
-            "probe_height": np.zeros(num_frames),
-            "probe_x": np.zeros(num_frames),
-            "probe_y": np.zeros(num_frames),
+            "interpolatable": {},
+            "events": {}
         }
+        for key, meta in self.TIMELINE_KEYS.items():
+            if meta["can_interp"]:
+                timeline_frames["interpolatable"][key] = np.zeros(num_frames)
+            # else:
+            #     timeline_frames["events"][key] = {}
+        # discard any keys that are not in the timeline keys
+        timeline_filtered = self._filter_timeline_keys(timeline)
 
-        standardized_timeline = self.standardize_timeline(timeline)
+        # separate interpolatable keys from events
+        timeline_interpolatable, timeline_events = self._separate_interpolatable_from_events(timeline_filtered)
 
-        # fill the timeline arrays
-        for i in range(len(timeline) - 1):
+        # fill in missing keys for interpolatable keys (by carrying forward the last value) and sort by timepoint
+        standardized_timeline = self.standardize_timeline(timeline_interpolatable)
+
+        # fill the timeline arrays for interpolatable keys
+        for i in range(len(standardized_timeline) - 1):
             current_time, current_settings = standardized_timeline[i]
             next_time, next_settings = standardized_timeline[i+1]
             current_frame = sec2frame(current_time, fps)
             next_frame = sec2frame(next_time, fps)
             n_frames = next_frame - current_frame
 
-            for key in timeline_frames.keys():
+            # for each key, either interpolate between the current and next value
+            for key in timeline_frames["interpolatable"].keys():
                 current_val = current_settings[key]
                 next_val = next_settings[key]
-                timeline_frames[key][current_frame:next_frame] = np.linspace(current_val, next_val, n_frames)
+                timeline_frames["interpolatable"][key][current_frame:next_frame] = np.linspace(current_val, next_val, n_frames)
+
+        # fill timeline events
+        for timepoint, settings in timeline_events:
+            frame = sec2frame(timepoint, fps)
+            if settings:  # only add if there are event settings
+                if frame not in timeline_frames["events"]:
+                    timeline_frames["events"][frame] = {}
+                timeline_frames["events"][frame].update(settings)
 
         return timeline_frames
     
