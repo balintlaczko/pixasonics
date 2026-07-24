@@ -1,7 +1,7 @@
 from .features import Feature
 from .utils import scale_array_exp, sec2frame, resize_interp, samps2mix, ids2mask_cropped, array2str
-from .ui import MapperCard, AppUI, DisplaySettings, ProbeSettings, AudioSettings, Model, find_widget_by_tag
-from .synths import Synth, Envelope
+from .ui import MapperCard, AppUI, DisplaySettings, ProbeSettings, AudioSettings, AudioIOSettingsCard, Model, find_widget_by_tag
+from .synths import Synth, Envelope, SynthRegistry
 from ipycanvas import hold_canvas, MultiCanvas, Canvas
 from IPython.display import display
 import time
@@ -14,8 +14,220 @@ from functools import lru_cache, wraps
 from contextlib import contextmanager
 import asyncio
 from itertools import chain
+import platform
 
-class AppRegistry:
+
+class AudioIOSettings(): # singleton
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(AudioIOSettings, cls).__new__(cls)
+            cls._instance.__initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self.__initialized:
+            return
+        self.graph = sf.AudioGraph.get_shared_graph()
+        if self.graph is None:
+            self.graph = sf.AudioGraph(start=True)
+
+        self.sr_options = [16000, 22050, 24000, 44100, 48000, 88200, 96000]
+        self.buffer_size_options = [16, 32, 64, 128, 256, 441, 480, 512, 1024, 2048, 4096]
+        self.card = None
+
+        # create safe defaults for all three platforms (Mac, Windows, Linux) for the most common audio interfaces
+        if platform.system() == "Darwin":
+            self._backend = "coreaudio"
+            self._input_device = "MacBook Pro Microphone"
+            self._output_device = "MacBook Pro Speakers"
+        elif platform.system() == "Windows":
+            self._backend = "wasapi"
+            self._input_device = "Microphone (Realtek(R) Audio)"
+            self._output_device = "Speakers (Realtek(R) Audio)"
+        elif platform.system() == "Linux":
+            self._backend = "alsa"
+            self._input_device = "default"
+            self._output_device = "default"
+        else:
+            raise ValueError(f"Unsupported platform: {platform.system()}")
+
+        self._backend = Model(self._backend)
+        self._input_device = Model(self._input_device)
+        self._output_device = Model(self._output_device)
+        self._sr = Model(48000)
+        self._buffer_size = Model(256)
+
+        self.create_ui()
+        self.__initialized = True
+
+    def _set_create_graph_button_warning(self):
+        create_graph_button = find_widget_by_tag(self.ui, "create_graph_button")
+        create_graph_button.button_style = 'warning'
+
+    @property
+    def backend_names(self):
+        return self.graph.get_backend_names()
+
+    @property
+    def input_device_names(self):
+        return self.graph.get_input_device_names()
+
+    @property
+    def output_device_names(self):
+        return self.graph.get_output_device_names()
+
+    @property
+    def backend(self):
+        return self._backend.value
+
+    @backend.setter
+    def backend(self, value):
+        if value not in self.backend_names:
+            raise ValueError(f"Invalid backend: {value}. Must be one of {self.backend_names}")
+        self._backend.value = value
+        self._set_create_graph_button_warning()
+
+    @property
+    def input_device(self):
+        return self._input_device.value
+
+    @input_device.setter
+    def input_device(self, value):
+        if value not in self.input_device_names:
+            raise ValueError(f"Invalid input device: {value}. Must be one of {self.input_device_names}")
+        self._input_device.value = value
+        self._set_create_graph_button_warning()
+
+    @property
+    def output_device(self):
+        return self._output_device.value
+
+    @output_device.setter
+    def output_device(self, value):
+        if value not in self.output_device_names:
+            raise ValueError(f"Invalid output device: {value}. Must be one of {self.output_device_names}")
+        self._output_device.value = value
+        self._set_create_graph_button_warning()
+
+    @property
+    def sr(self):
+        return self._sr.value
+
+    @sr.setter
+    def sr(self, value):
+        if value not in self.sr_options:
+            raise ValueError(f"Invalid sample rate: {value}. Must be one of {self.sr_options}")
+        self._sr.value = value
+        self._set_create_graph_button_warning()
+
+    @property
+    def buffer_size(self):
+        return self._buffer_size.value
+
+    @buffer_size.setter
+    def buffer_size(self, value):
+        if value not in self.buffer_size_options:
+            raise ValueError(f"Invalid buffer size: {value}. Must be one of {self.buffer_size_options}")
+        self._buffer_size.value = value
+        self._set_create_graph_button_warning()
+
+    @property
+    def ui(self):
+        return self._ui()
+
+    def get_config(self):
+        config = sf.AudioGraphConfig()
+        config.output_backend_name = self._backend.value
+        config.input_device_name = self._input_device.value
+        config.output_device_name = self._output_device.value
+        config.sample_rate = self._sr.value
+        config.input_buffer_size = self._buffer_size.value
+        config.output_buffer_size = self._buffer_size.value
+        return config
+
+    def create_audio_graph(self):
+        config = self.get_config()
+        self.graph = sf.AudioGraph.get_shared_graph()
+        if self.graph is not None:
+            self.graph.destroy()
+        self.graph = sf.AudioGraph(config=config, start=True)
+
+        # check if the graph was created successfully
+        if sf.AudioGraph.get_shared_graph() is None:
+            raise RuntimeError("Failed to create audio graph. Please check your audio settings and try again.")
+
+        # first, notify all registered synths to re-register themselves with the new graph
+        SynthRegistry().notify_reregister(self)
+        # then, notify all registered apps to re-create their audio graphs
+        AppRegistry().notify_reregister(self)
+
+        # change the color of the create graph button to indicate that the graph has been created
+        create_graph_button = find_widget_by_tag(self.ui, "create_graph_button")
+        create_graph_button.button_style = 'success'
+
+    def refresh_devices(self):
+        """Update the dropdowns with the current devices and backend."""
+
+        backend_dropdown = find_widget_by_tag(self.ui, "backend_dropdown")
+        input_device_dropdown = find_widget_by_tag(self.ui, "input_device_dropdown")
+        output_device_dropdown = find_widget_by_tag(self.ui, "output_device_dropdown")
+
+        # Update the options and valuesfor each dropdown
+        # since at this point the dropdowns are likely aready been bound, we have to first save the current property values, then update the options, and finally restore the property values to the dropdowns
+        current_backend = self._backend.value
+        current_input_device = self._input_device.value
+        current_output_device = self._output_device.value
+
+        backend_dropdown.options = self.backend_names
+        input_device_dropdown.options = self.input_device_names
+        output_device_dropdown.options = self.output_device_names
+
+        self._backend.value = current_backend if current_backend in self.backend_names else self.backend_names[0]
+        self._input_device.value = current_input_device if current_input_device in self.input_device_names else self.input_device_names[0]
+        self._output_device.value = current_output_device if current_output_device in self.output_device_names else self.output_device_names[0]
+
+        backend_dropdown.value = self._backend.value
+        input_device_dropdown.value = self._input_device.value
+        output_device_dropdown.value = self._output_device.value
+
+
+    def create_ui(self):
+        self._ui = AudioIOSettingsCard(
+            backend_names=self.backend_names,
+            input_device_names=self.input_device_names,
+            output_device_names=self.output_device_names,
+            sr_options=self.sr_options,
+            buffer_size_options=self.buffer_size_options
+        )
+
+        # set parent ref
+        self._ui.audio_io_settings = self
+
+        # bind props to the dropdowns
+        backend_dropdown = find_widget_by_tag(self.ui, "backend_dropdown")
+        backend_dropdown.value = self._backend.value
+        self._backend.bind_widget(backend_dropdown, extra_callback=self._set_create_graph_button_warning)
+
+        input_device_dropdown = find_widget_by_tag(self.ui, "input_device_dropdown")
+        input_device_dropdown.value = self._input_device.value
+        self._input_device.bind_widget(input_device_dropdown, extra_callback=self._set_create_graph_button_warning)
+
+        output_device_dropdown = find_widget_by_tag(self.ui, "output_device_dropdown")
+        output_device_dropdown.value = self._output_device.value
+        self._output_device.bind_widget(output_device_dropdown, extra_callback=self._set_create_graph_button_warning)
+
+        sr_dropdown = find_widget_by_tag(self.ui, "sr_dropdown")
+        sr_dropdown.value = self._sr.value
+        self._sr.bind_widget(sr_dropdown, extra_callback=self._set_create_graph_button_warning)
+        
+        buffer_size_dropdown = find_widget_by_tag(self.ui, "buffer_size_dropdown")
+        buffer_size_dropdown.value = self._buffer_size.value
+        self._buffer_size.bind_widget(buffer_size_dropdown, extra_callback=self._set_create_graph_button_warning)
+
+
+class AppRegistry: # singleton
     _instance = None
     _apps = set()
 
@@ -130,8 +342,6 @@ class App():
         self._unmuted = False
         self._unmuted_on_last_draw = False
         self._nrt = nrt
-        self._output_buffer_size = 480 # output_buffer_size
-        self._sample_rate = 48000 # sample_rate
         self._normalize_display = Model(False)
         self._normalize_display_global = Model(False)
         self._display_normalization_low_percentile = Model([0.0])
@@ -178,6 +388,7 @@ class App():
         self.start_compute_thread()
 
         AppRegistry().register(self)
+        AudioIOSettings() # initialize the singleton if it hasn't been already
 
     # class-level constant for timeline keys (used in NRT timeline generation)
     TIMELINE_KEYS = {
@@ -783,17 +994,6 @@ class App():
             return self.graph.output_buffer_size
         else:
             return None
-        
-    # @output_buffer_size.setter
-    # def output_buffer_size(self, value):
-    #     # print(f"Setting output buffer size to {value}")
-    #     self._output_buffer_size = value
-    #     # print(f"Destroying audio graph")
-    #     self.graph.destroy()
-    #     # print(f"Creating new audio graph")
-    #     self.create_audio_graph()
-    #     # # print(f"Re-registering app")
-    #     # AppRegistry().notify_reregister(self)
 
     @property
     def sample_rate(self):
@@ -1033,10 +1233,7 @@ class App():
         # Get or create the shared audio graph
         self.graph = sf.AudioGraph.get_shared_graph()
         if self.graph is None:
-            config = sf.AudioGraphConfig()
-            config.output_buffer_size = self._output_buffer_size
-            config.sample_rate = self._sample_rate
-            self.graph = sf.AudioGraph(config=config, start=True)
+            self.graph = AudioIOSettings().graph
 
 
         # Master volume
@@ -1069,7 +1266,7 @@ class App():
             self.audio_out = sf.ChannelMixer(1, self.audio_out)
 
         # Add any registered synths to the bus
-        # TODO: with new synths (based on specs) we'll have to re-instantiate them here on a potentially new graph
+        # (in case of a new graph, the AudioIOSettings will ask the SynthRegistry to re-register all synths before this step)
         for synth in self.synths:
             self.bus.add_input(synth.output)
 
@@ -1652,26 +1849,7 @@ class App():
             np.ndarray: The probe matrix.
         """
         if self.probe_with_mask and self._mask_is_loaded:
-        #     if self.selected_mask_ids.ndim == 1:
-        #         selected_mask = np.isin(self.mask, self.selected_mask_ids)
-        #     elif self.selected_mask_ids.ndim == 2:
-        #         if self.selected_mask_ids.dtype != object:
-        #             selected_mask = (self.mask == self.selected_mask_ids)
-        #         else:
-        #             selected_mask = np.zeros_like(self.mask, dtype=bool)
-        #             selected_mask_ids_broadcasted = np.broadcast_to(self.selected_mask_ids, (self._mask_channels, self._mask_layers))
-        #             for chan in range(self._mask_channels):
-        #                 for layer in range(self._mask_layers):
-        #                     ids = selected_mask_ids_broadcasted[chan, layer]
-        #                     if ids:
-        #                         mask_slice = self.mask[:, :, chan, layer]
-        #                         selected_mask[:, :, chan, layer] = np.isin(mask_slice, ids)
-        #     else:
-        #         raise ValueError("selected_mask_ids must be 1D or 2D array")
-        #     unselected_mask = (~selected_mask) | (self.mask == 0)
-        #     unselected_mask_broadcasted = np.broadcast_to(unselected_mask, self.bg_hires.shape)
-
-            # use cached mask computation if available
+            # compute cached mask if necessary
             if self._cached_mask_result is None:
                 self._compute_mask_arrays()
 
@@ -1681,14 +1859,8 @@ class App():
             if bbox is not None:
                 y_min, y_max, x_min, x_max = bbox
                 probe = probe[y_min:y_max, x_min:x_max]
-            # # crop H and W to the bounding box of the selected mask
-            # active_2d = np.any(~unselected_mask_broadcasted, axis=(2, 3))
-            # rows = np.where(active_2d.any(axis=1))[0]
-            # cols = np.where(active_2d.any(axis=0))[0]
-            # if rows.size > 0 and cols.size > 0:
-            #     y_min, y_max = rows[0], rows[-1] + 1
-            #     x_min, x_max = cols[0], cols[-1] + 1
-            #     probe = probe[y_min:y_max, x_min:x_max]
+
+        # if normal rectangular probe        
         else:
             x_from = max(self.probe_x - self.probe_width//2, 0)
             y_from = max(self.probe_y - self.probe_height//2, 0)
@@ -1786,10 +1958,6 @@ class App():
         self._nrt_prev = self._nrt # save current nrt state for later
         self._audio_prev = self.audio # save current audio state for later
         self._unmuted_prev = self.unmuted # save current unmuted state for later
-        # probe_x_prev = self.probe_x
-        # probe_y_prev = self.probe_y
-        # probe_width_prev = self.probe_width
-        # probe_height_prev = self.probe_height
         prev_state = {key: getattr(self, key) for key in self.TIMELINE_KEYS.keys()}
         # stop compute thread
         self.stop_compute_thread()
@@ -1847,11 +2015,7 @@ class App():
         self.nrt = self._nrt_prev # call setter to set audio btn and notify mappers
         self.audio = self._audio_prev
         self.unmuted = self._unmuted_prev
-        # restore the Probe state
-        # self.probe_width = probe_width_prev
-        # self.probe_height = probe_height_prev
-        # self.probe_x = probe_x_prev
-        # self.probe_y = probe_y_prev
+        # restore the state
         for key in self.TIMELINE_KEYS.keys():
             setattr(self, key, prev_state[key])
         AppRegistry().notify_resume(self) # notify other apps to resume their audio
@@ -1865,12 +2029,6 @@ class App():
 
     def render_frame(self, frame, settings):
         # set the app to the settings, casting to the expected type
-
-        # self.probe_x = settings["probe_x"]
-        # self.probe_y = settings["probe_y"]
-        # self.probe_width = settings["probe_width"]
-        # self.probe_height = settings["probe_height"]
-
         for key in settings.keys():
             meta = self.TIMELINE_KEYS.get(key, None)
             val = settings[key]
