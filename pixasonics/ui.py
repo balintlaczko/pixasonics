@@ -1,5 +1,5 @@
 from ipycanvas import Canvas, hold_canvas
-from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, BoundedIntText, ToggleButtons, Checkbox
+from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, BoundedIntText, ToggleButtons, Checkbox, Dropdown
 from math import log10
 from .utils import array2str, scale_array_exp
 import numpy as np
@@ -1255,6 +1255,184 @@ class ExponentPlot():
                 justify_content='center',
                 align_items='center',
                 width='auto',)
+        )
+
+
+class AudioIOSettingsCard():
+    def __init__(
+            self,
+            backend_names: List[str],
+            input_device_names: List[str],
+            output_device_names: List[str],
+            sr_options: List[int],
+            buffer_size_options: List[int]
+    ):
+        # check that lists are not empty
+        if not backend_names:
+            raise ValueError("backend_names list is empty")
+        if not input_device_names:
+            raise ValueError("input_device_names list is empty")
+        if not output_device_names:
+            raise ValueError("output_device_names list is empty")
+        if not sr_options:
+            raise ValueError("sr_options list is empty")
+        if not buffer_size_options:
+            raise ValueError("buffer_size_options list is empty")
+
+        self.audio_io_settings = None
+
+        
+        self.create_ui(
+            backend_names=backend_names,
+            input_device_names=input_device_names,
+            output_device_names=output_device_names,
+            sr_options=sr_options,
+            buffer_size_options=buffer_size_options
+        )
+
+    def refresh_callback(self, b):
+        if self.audio_io_settings is not None:
+            self.audio_io_settings.refresh_devices()
+
+    def create_audio_graph_callback(self, b):
+        if self.audio_io_settings is not None:
+            self.audio_io_settings.create_audio_graph()
+
+    def __call__(self):
+        return self.box
+
+    def create_ui(
+            self,
+            backend_names: List[str],
+            input_device_names: List[str],
+            output_device_names: List[str],
+            sr_options: List[int],
+            buffer_size_options: List[int]
+    ):
+        backend_dropdown_label = Label(value="Backend:")
+        backend_dropdown = Dropdown(
+            options=backend_names,
+            value=backend_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        backend_dropdown.tag = "backend_dropdown"
+        backend_dropdown_box = HBox([
+            backend_dropdown_label, backend_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        input_device_dropdown_label = Label(value="Input Device:")
+        input_device_dropdown = Dropdown(
+            options=input_device_names,
+            value=input_device_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        input_device_dropdown.tag = "input_device_dropdown"
+        input_device_dropdown_box = HBox([
+            input_device_dropdown_label, input_device_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        output_device_dropdown_label = Label(value="Output Device:")
+        output_device_dropdown = Dropdown(
+            options=output_device_names,
+            value=output_device_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        output_device_dropdown.tag = "output_device_dropdown"
+        output_device_dropdown_box = HBox([
+            output_device_dropdown_label, output_device_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        sr_dropdown_label = Label(value="Sample Rate:")
+        sr_dropdown = Dropdown(
+            options=sr_options,
+            value=sr_options[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        sr_dropdown.tag = "sr_dropdown"
+        sr_dropdown_box = HBox([
+            sr_dropdown_label, sr_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        buffer_size_dropdown_label = Label(value="Buffer Size:")
+        buffer_size_dropdown = Dropdown(
+            options=buffer_size_options,
+            value=buffer_size_options[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        buffer_size_dropdown.tag = "buffer_size_dropdown"
+        buffer_size_dropdown_box = HBox([
+            buffer_size_dropdown_label, buffer_size_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        refresh_button = Button(
+            description='Refresh Devices',
+            layout=Layout(width='150px')
+        )
+        refresh_button.tag = "refresh_button"
+        refresh_button.on_click(self.refresh_callback)
+
+        create_graph_button = Button(
+            description='Create Graph',
+            layout=Layout(width='150px')
+        )
+        create_graph_button.tag = "create_graph_button"
+        create_graph_button.on_click(self.create_audio_graph_callback)
+        buttons_box = HBox([
+            refresh_button, create_graph_button],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        self.box = Box([
+            backend_dropdown_box,
+            input_device_dropdown_box,
+            output_device_dropdown_box,
+            sr_dropdown_box,
+            buffer_size_dropdown_box,
+            buttons_box
+        ],
+            layout=Layout(
+                width='100%',
+                max_width='360px',
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                padding='5px',
+                border='2px solid gray'
+            )
         )
 
 
