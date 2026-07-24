@@ -11,6 +11,27 @@ import threading
 # PARAM_SLIDER_DEBOUNCE_TIME = 0.05
 PARAM_SMOOTHING_TIME = 0.05
 
+class SynthRegistry: # singleton
+    _instance = None
+    _synths = set()
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(SynthRegistry, cls).__new__(cls)
+        return cls._instance
+
+    def register(self, synth):
+        self._synths.add(synth)
+
+    def unregister(self, synth):
+        self._synths.discard(synth)
+
+    def notify_reregister(self, notifier):
+        for synth in self._synths:
+            if synth != notifier:
+                synth.create_audio_graph()
+
+
 class Synth():
     def __init__(
             self, 
@@ -44,6 +65,16 @@ class Synth():
         self.create_ui()
         # create param slider debouncer if necessary
         # self.debouncer = ParamSliderDebouncer(PARAM_SLIDER_DEBOUNCE_TIME) if self.num_channels == 1 else None
+        SynthRegistry().register(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        SynthRegistry().unregister(self)
+
+    def __del__(self):
+        SynthRegistry().unregister(self)
 
     def generate_params(self):
         # check that there are keys for all params
