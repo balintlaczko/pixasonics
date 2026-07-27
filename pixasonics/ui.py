@@ -1264,7 +1264,7 @@ class AudioIOSettingsCard():
             backend_names: List[str],
             input_device_names: List[str],
             output_device_names: List[str],
-            sr_options: List[int],
+            sample_rate_options: List[int],
             buffer_size_options: List[int]
     ):
         # check that lists are not empty
@@ -1274,8 +1274,8 @@ class AudioIOSettingsCard():
             raise ValueError("input_device_names list is empty")
         if not output_device_names:
             raise ValueError("output_device_names list is empty")
-        if not sr_options:
-            raise ValueError("sr_options list is empty")
+        if not sample_rate_options:
+            raise ValueError("sample_rate_options list is empty")
         if not buffer_size_options:
             raise ValueError("buffer_size_options list is empty")
 
@@ -1286,7 +1286,7 @@ class AudioIOSettingsCard():
             backend_names=backend_names,
             input_device_names=input_device_names,
             output_device_names=output_device_names,
-            sr_options=sr_options,
+            sample_rate_options=sample_rate_options,
             buffer_size_options=buffer_size_options
         )
 
@@ -1306,7 +1306,7 @@ class AudioIOSettingsCard():
             backend_names: List[str],
             input_device_names: List[str],
             output_device_names: List[str],
-            sr_options: List[int],
+            sample_rate_options: List[int],
             buffer_size_options: List[int]
     ):
         backend_dropdown_label = Label(value="Backend:")
@@ -1360,16 +1360,16 @@ class AudioIOSettingsCard():
                 flex_flow='row',
                 padding='5px'))
 
-        sr_dropdown_label = Label(value="Sample Rate:")
-        sr_dropdown = Dropdown(
-            options=sr_options,
-            value=sr_options[0],
+        sample_rate_dropdown_label = Label(value="Sample Rate:")
+        sample_rate_dropdown = Dropdown(
+            options=sample_rate_options,
+            value=sample_rate_options[0],
             description='',
             layout=Layout(width='auto')
         )
-        sr_dropdown.tag = "sr_dropdown"
-        sr_dropdown_box = HBox([
-            sr_dropdown_label, sr_dropdown],
+        sample_rate_dropdown.tag = "sample_rate_dropdown"
+        sample_rate_dropdown_box = HBox([
+            sample_rate_dropdown_label, sample_rate_dropdown],
             layout=Layout(
                 width='100%',
                 justify_content='space-between',
@@ -1420,7 +1420,7 @@ class AudioIOSettingsCard():
             backend_dropdown_box,
             input_device_dropdown_box,
             output_device_dropdown_box,
-            sr_dropdown_box,
+            sample_rate_dropdown_box,
             buffer_size_dropdown_box,
             buttons_box
         ],

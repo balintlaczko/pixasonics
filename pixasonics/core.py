@@ -33,7 +33,7 @@ class AudioIOSettings(): # singleton
         if self.graph is None:
             self.graph = sf.AudioGraph(start=True)
 
-        self.sr_options = [16000, 22050, 24000, 44100, 48000, 88200, 96000]
+        self.sample_rate_options = [16000, 22050, 24000, 44100, 48000, 88200, 96000]
         self.buffer_size_options = [16, 32, 64, 128, 256, 441, 480, 512, 1024, 2048, 4096]
         self.card = None
 
@@ -56,7 +56,7 @@ class AudioIOSettings(): # singleton
         self._backend = Model(self._backend)
         self._input_device = Model(self._input_device)
         self._output_device = Model(self._output_device)
-        self._sr = Model(48000)
+        self._sample_rate = Model(48000)
         self._buffer_size = Model(256)
 
         self.create_ui()
@@ -112,14 +112,14 @@ class AudioIOSettings(): # singleton
         self._set_create_graph_button_warning()
 
     @property
-    def sr(self):
-        return self._sr.value
+    def sample_rate(self):
+        return self._sample_rate.value
 
-    @sr.setter
-    def sr(self, value):
-        if value not in self.sr_options:
-            raise ValueError(f"Invalid sample rate: {value}. Must be one of {self.sr_options}")
-        self._sr.value = value
+    @sample_rate.setter
+    def sample_rate(self, value):
+        if value not in self.sample_rate_options:
+            raise ValueError(f"Invalid sample rate: {value}. Must be one of {self.sample_rate_options}")
+        self._sample_rate.value = value
         self._set_create_graph_button_warning()
 
     @property
@@ -142,7 +142,7 @@ class AudioIOSettings(): # singleton
         config.output_backend_name = self._backend.value
         config.input_device_name = self._input_device.value
         config.output_device_name = self._output_device.value
-        config.sample_rate = self._sr.value
+        config.sample_rate = self._sample_rate.value
         config.input_buffer_size = self._buffer_size.value
         config.output_buffer_size = self._buffer_size.value
         return config
@@ -198,7 +198,7 @@ class AudioIOSettings(): # singleton
             backend_names=self.backend_names,
             input_device_names=self.input_device_names,
             output_device_names=self.output_device_names,
-            sr_options=self.sr_options,
+            sample_rate_options=self.sample_rate_options,
             buffer_size_options=self.buffer_size_options
         )
 
@@ -218,10 +218,10 @@ class AudioIOSettings(): # singleton
         output_device_dropdown.value = self._output_device.value
         self._output_device.bind_widget(output_device_dropdown, extra_callback=self._set_create_graph_button_warning)
 
-        sr_dropdown = find_widget_by_tag(self.ui, "sr_dropdown")
-        sr_dropdown.value = self._sr.value
-        self._sr.bind_widget(sr_dropdown, extra_callback=self._set_create_graph_button_warning)
-        
+        sample_rate_dropdown = find_widget_by_tag(self.ui, "sample_rate_dropdown")
+        sample_rate_dropdown.value = self._sample_rate.value
+        self._sample_rate.bind_widget(sample_rate_dropdown, extra_callback=self._set_create_graph_button_warning)
+
         buffer_size_dropdown = find_widget_by_tag(self.ui, "buffer_size_dropdown")
         buffer_size_dropdown.value = self._buffer_size.value
         self._buffer_size.bind_widget(buffer_size_dropdown, extra_callback=self._set_create_graph_button_warning)
@@ -2248,6 +2248,8 @@ class App():
                                         else:
                                             current_ids.append(id)
                                         self.selected_mask_ids[chan, layer] = current_ids
+                            # invalidate the cached mask result since the selected_mask_ids have changed
+                            self._cached_mask_result = None
                     # update the mask IDs display
                     self.update_mask_ids_display()
                     # redraw the mask display
