@@ -3,6 +3,7 @@ import signalflow as sf
 from .ui import FeatureCard, find_widget_by_tag
 from .utils import array2str, filter_matrix
 import time
+import warnings
 
 
 class Feature():
@@ -112,7 +113,7 @@ class Feature():
     
     @target_dim.setter
     def target_dim(self, target_dim):
-        assert target_dim in [0, 1, 2, 3], "target_dim must be 0, 1, 2, or 3"
+        assert target_dim in [-1, 0, 1, 2, 3], "target_dim must be -1, 0, 1, 2, or 3"
         self._target_dim = target_dim
 
     @property
@@ -135,23 +136,23 @@ class Feature():
             "Unknown reduce method string. Must be one of: mean, max, min, sum, std, var, median"
         self._reduce_method = reduce_method
 
-    @property 
-    def reduce(self):
-        """Get the reduction function based on reduce_method string"""
-        if self.reduce_method == "mean":
-            return np.mean
-        elif self.reduce_method == "max":
-            return np.max
-        elif self.reduce_method == "min":
-            return np.min
-        elif self.reduce_method == "sum":
-            return np.sum
-        elif self.reduce_method == "std":
-            return np.std
-        elif self.reduce_method == "var":
-            return np.var
-        elif self.reduce_method == "median":
-            return np.median
+    # @property 
+    # def reduce(self):
+    #     """Get the reduction function based on reduce_method string"""
+    #     if self.reduce_method == "mean":
+    #         return np.mean
+    #     elif self.reduce_method == "max":
+    #         return np.max
+    #     elif self.reduce_method == "min":
+    #         return np.min
+    #     elif self.reduce_method == "sum":
+    #         return np.sum
+    #     elif self.reduce_method == "std":
+    #         return np.std
+    #     elif self.reduce_method == "var":
+    #         return np.var
+    #     elif self.reduce_method == "median":
+    #         return np.median
         
     @property
     def reduce_axis(self):
@@ -241,8 +242,63 @@ class Feature():
         """Compute the feature from the matrix, override this method for custom computation.
         The custom computation should return a 1D array of shape (num_features,)
         """
-        return self.reduce(mat, axis=self.reduce_axis)
-    
+        if self.target_dim == -1:
+            return self.reduce(mat, self._reduce_method, self.reduce_axis)[..., None] # add the sample dimension, so it is (num_features, 1)
+        return self.reduce(mat, self._reduce_method, self.reduce_axis)
+
+    def reduce(self, mat, method, axis=None):
+        """
+        Reduces a submatrix along specified axes handling both standard 
+        and masked arrays, dynamically adapting to the underlying dtype.
+        """
+        valid_methods = {'mean', 'min', 'max', 'median', 'std', 'var', 'sum'}
+        if method not in valid_methods:
+            raise ValueError(f"Method '{method}' must be one of {valid_methods}")
+
+        # 1. Fast path: Standard arrays or MaskedArrays with no masked elements
+        is_masked = np.ma.isMaskedArray(mat)
+        if not is_masked or mat.mask is np.ma.nomask:
+            if method == 'median':
+                return np.median(mat, axis=axis)
+            return getattr(np, method)(mat, axis=axis)
+
+        # 2. Masked array handling
+        data = mat.data
+        mask = mat.mask
+
+        # min/max/sum: Bypass np.ma overhead using np.where substitution
+        if method in {'min', 'max'}:
+            is_int = np.issubdtype(data.dtype, np.integer)
+            is_float = np.issubdtype(data.dtype, np.floating)
+            
+            if not (is_int or is_float):
+                raise TypeError(f"Unsupported dtype: {data.dtype}")
+
+            if method == 'min':
+                fill_val = np.iinfo(data.dtype).max if is_int else np.inf
+                return np.min(np.where(mask, fill_val, data), axis=axis)
+                
+            elif method == 'max':
+                fill_val = np.iinfo(data.dtype).min if is_int else -np.inf
+                return np.max(np.where(mask, fill_val, data), axis=axis)
+
+        elif method == 'sum':
+            # 0 is the identity for addition, perfectly fitting any numeric dtype
+            return np.sum(np.where(mask, 0, data), axis=axis)
+
+        # 3. Complex metrics (mean, std, var, median): Delegate to np.ma
+        else:
+            # Patch the fill_value in-place to prevent internal TypeErrors for integer arrays
+            if np.issubdtype(data.dtype, np.integer):
+                mat.set_fill_value(0)
+                
+            func = getattr(np.ma, method)
+            
+            # Suppress RuntimeWarnings for operations on entirely masked slices 
+            # (e.g., calculating the mean of an array containing only masked pixels)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                return func(mat, axis=axis)
     
     def process_image(self, mat):
         """Override this method for custom processing of the App's whole image, called upon attachment to the App.
