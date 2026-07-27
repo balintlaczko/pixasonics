@@ -20,9 +20,15 @@ def sec2frame(sec, fps):
     "Convert seconds to a frame number"
     return int(round(sec * fps))
 
-def array2str(arr, decimals=3):
+def array2str(arr, decimals=3, keep_brackets=False):
     """String from an array, where elements are rounded to decimals, and the square brackets are removed."""
-    return str(np.round(arr, decimals)).replace('[', '').replace(']', '')
+    if type(arr) == list:
+        rounded = np.round(arr, decimals)
+    else: # np.ndarray
+        rounded = np.round(arr, decimals) if arr.dtype != object else arr
+    if keep_brackets:
+        return str(rounded)
+    return str(rounded).replace('[', '').replace(']', '')
 
 @jit(nopython=True)
 def scale_array_exp(
@@ -143,6 +149,113 @@ def test_filter_matrix():
     assert b.shape == (1, 1, 1, 3)
 
 
+@jit(nopython=True)
+def id2contour_cropped(mask_img: np.ndarray, chosen_id: int, mask_channel: int=0, mask_layer: int=0) -> tuple[np.ndarray, int, int]:
+    """
+    Convert a segmentation mask to a contour mask of a given label, at a specific channel and layer in the mask.
+    Returns a cropped contour mask and its position.
+
+    Args:
+        mask_img (np.ndarray): The segmentation mask (values represent labels).
+        chosen_id (int): The label ID to create a contour for.
+        mask_channel (int): The channel of the mask to use.
+        mask_layer (int): The layer of the mask to use.
+
+    Returns:
+        np.ndarray: The contour mask as a binary image.
+        int: The top edge of the contour.
+        int: The left edge of the contour.
+    """
+    mask_filtered = np.where(mask_img[..., mask_channel, mask_layer] == chosen_id, 1, 0).astype(np.uint8)
+    # get the coordinates of the active pixels
+    active_pixels = np.argwhere(mask_filtered)
+    # get edge pixels
+    edge_left, edge_right = active_pixels[:, 1].min(), active_pixels[:, 1].max()
+    edge_top, edge_bottom = active_pixels[:, 0].min(), active_pixels[:, 0].max()
+    # crop the mask to the bounding box
+    mask_cropped = mask_filtered[edge_top:edge_bottom+1, edge_left:edge_right+1]
+    # loop through each row and keep only left-most and right-most pixels
+    mask_cropped_contour = np.zeros_like(mask_cropped)
+    for i in range(mask_cropped.shape[0]):
+        row = mask_cropped[i]
+        active_indices = np.where(row == 1)[0]
+        # for the first and last row, keep the whole row
+        if i == 0 or i == mask_cropped.shape[0] - 1:
+            mask_cropped_contour[i] = row
+        elif len(active_indices) > 0:
+            left_most = active_indices.min()
+            right_most = active_indices.max()
+            prev_row = mask_cropped[i - 1]
+            next_row = mask_cropped[i + 1]
+            # pixels that have only one active neighbor in the column (e.g., only above or below)
+            one_active = np.clip(np.where(prev_row + next_row == 1)[0], left_most, right_most)
+            row_mask = np.unique(np.concatenate((np.array([left_most, right_most]), one_active)))
+            new_row = np.zeros_like(row)
+            new_row[row_mask] = 1
+            mask_cropped_contour[i] = new_row * row # filter only pixels that were active in row
+    return mask_cropped_contour[..., None], edge_top, edge_left # add channel dim to mask
+
+
+# it is faster without jit
+def ids2mask_cropped(mask_img: np.ndarray, chosen_ids: np.ndarray, num_channels: int=3, channel_offset: int=0, layer_offset: int=0) -> tuple[np.ndarray, int, int]:
+    """
+    Convert a segmentation mask to a mask covering all chosen IDs, with given channel and layer offsets.
+    Returns a cropped mask and its position.
+
+    Args:
+        mask_img (np.ndarray): The segmentation mask (values represent labels).
+        chosen_ids (np.ndarray): The label IDs to create a mask for. Either in the shape of (channels, layers), or, if 1D, the same set of multiple labels will be selected on all channels/layers.
+        num_channels (int): The number of channels to include in the output mask. Defaults to 3.
+        channel_offset (int): The channel offset to apply to the mask. If the mask has more than 3 channels, this will get the 3 channels starting from channel_offset.
+        layer_offset (int): The layer offset to apply to the mask.
+
+    Returns:
+        np.ndarray: The mask as a binary image.
+        int: The top edge of the mask.
+        int: The left edge of the mask.
+    """
+    # if 1D, use np.isin() to select the same set of IDs for all channels/layers
+    if chosen_ids.ndim == 1:
+        bool_mask = np.isin(mask_img, chosen_ids)
+    # if 2D
+    elif chosen_ids.ndim == 2:
+        # if NOT object type, we can use broadcasting to create a boolean mask
+        if chosen_ids.dtype != object:
+            bool_mask = (mask_img == chosen_ids)
+        # if object type, we need to loop through each channel and layer
+        else:
+            bool_mask = np.zeros_like(mask_img, dtype=bool)
+            chosen_ids_broadcasted = np.broadcast_to(chosen_ids, (mask_img.shape[-2], mask_img.shape[-1]))
+            mask_chans, mask_layers = mask_img.shape[-2], mask_img.shape[-1]
+            for chan in range(mask_chans):
+                for layer in range(mask_layers):
+                    ids = chosen_ids_broadcasted[chan, layer]
+                    if ids:
+                        mask_slice = mask_img[..., chan, layer]
+                        bool_mask[..., chan, layer] = np.isin(mask_slice, ids)
+    else:
+        raise ValueError(f"Invalid chosen_ids shape. Expected 1D or 2D array, got {chosen_ids.ndim}D")
+    # multiply with the boolean mask_img to remove 0 labels
+    bool_mask *= mask_img.astype(bool)
+    # apply layer offset (if multilayer), remove layer dimension
+    mask_filtered = bool_mask[..., min(layer_offset, bool_mask.shape[-1] - 1)]
+    # apply channel offset if necessary
+    if mask_filtered.shape[-1] > 1:
+        mask_filtered = mask_filtered[..., channel_offset:min(channel_offset+num_channels, mask_filtered.shape[-1])]
+    mask_filtered = mask_filtered.any(axis=-1).astype(np.uint8)
+    # get the coordinates of the active pixels
+    active_pixels = np.argwhere(mask_filtered)
+    if active_pixels.size == 0:
+        # if no active pixels are found, return a None as the mask and zeros for coords
+        return None, 0, 0
+    # get edge pixels
+    edge_left, edge_right = active_pixels[:, 1].min(), active_pixels[:, 1].max()
+    edge_top, edge_bottom = active_pixels[:, 0].min(), active_pixels[:, 0].max()
+    # crop the mask to the bounding box
+    mask_cropped = mask_filtered[edge_top:edge_bottom+1, edge_left:edge_right+1]
+    return mask_cropped, int(edge_top), int(edge_left)
+
+
 def broadcast_params(*param_lists):
     """Helper function to broadcast and interpolate all param lists to the same length."""
     # if an input is a numpy array, convert it to a list
@@ -185,7 +298,7 @@ class Timer:
         self._cancel_event = threading.Event()
 
     def start(self):
-        self._start_time = time.time()
+        self._start_time = time.perf_counter()
         self._manager.add_timer(self)
 
     def cancel(self):
@@ -199,7 +312,7 @@ class Timer:
     def remaining_time(self):
         if self._start_time is None:
             return float('inf')
-        elapsed = time.time() - self._start_time
+        elapsed = time.perf_counter() - self._start_time
         return max(0, self._timeout - elapsed)
 
     def execute(self):

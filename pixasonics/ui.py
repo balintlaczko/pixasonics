@@ -1,5 +1,5 @@
 from ipycanvas import Canvas, hold_canvas
-from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, ToggleButtons, Checkbox
+from ipywidgets import Label, Layout, Box, VBox, HBox, GridBox, Button, IntSlider, FloatSlider, FloatLogSlider, ToggleButton, Accordion, Text, FloatText, IntText, BoundedFloatText, BoundedIntText, ToggleButtons, Checkbox, Dropdown
 from math import log10
 from .utils import array2str, scale_array_exp
 import numpy as np
@@ -660,10 +660,10 @@ class ProbeSettings():
         
         interaction_mode_label = Label(value="Interaction Mode:")
         interaction_mode_buttons = ToggleButtons(
-            options=['Hold', 'Toggle'],
+            options=['Hold', 'Toggle', 'Select'],
             value='Hold',
             button_style='',
-            tooltips=['Sound while mouse down', 'Double-click to start sound, double-click again to stop'],
+            tooltips=['Sound while mouse down', 'Double-click to start sound, double-click again to stop', 'Draw Probe rectangle or (un)select mask IDs'],
             layout=Layout(padding='0px 0px 0px 10px'),
             style=dict(
                 button_width='70px')
@@ -688,45 +688,168 @@ class ProbeSettings():
         )
         probe_follows_idle_mouse_checkbox.tag = "probe_follows_idle_mouse"
         
+        filter_probe_by_channel_offset = Checkbox(
+            value=False,
+            description='Filter Probe by Channel Offset',
+            tooltip='When enabled, only the data from the current display channel will be used for probing',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        filter_probe_by_channel_offset.tag = "filter_probe_by_channel_offset"
+        filter_probe_by_layer_offset = Checkbox(
+            value=False,
+            description='Filter Probe by Layer Offset',
+            tooltip='When enabled, only the data from the current display layer will be used for probing',
+            indent=False,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        filter_probe_by_layer_offset.tag = "filter_probe_by_layer_offset"
+        filter_offsets_box = VBox(
+            [filter_probe_by_channel_offset, filter_probe_by_layer_offset],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                width='100%',
+            )
+        )
+
+        probe_with_mask_checkbox = Checkbox(
+            value=False,
+            description='Probe with mask',
+            tooltip='When enabled, the loaded mask data will be used for probing',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_with_mask_checkbox.tag = "probe_with_mask"
+        probe_same_ids_across_channels_checkbox = Checkbox(
+            value=True,
+            description='Same mask IDs across channels (mousing)',
+            tooltip='When enabled, the same mask IDs are selected on all channels when mousing over the canvas',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_same_ids_across_channels_checkbox.tag = "same_mask_ids_across_channels"
+        probe_same_ids_across_layers_checkbox = Checkbox(
+            value=True,
+            description='Same mask IDs across layers (mousing)',
+            tooltip='When enabled, the same mask IDs are selected on all layers when mousing over the canvas',
+            indent=False,
+            disabled=True,
+            layout=Layout(
+                width='auto',
+                height='auto')
+        )
+        probe_same_ids_across_layers_checkbox.tag = "same_mask_ids_across_layers"
+        probe_same_ids_box = VBox(
+            [probe_same_ids_across_channels_checkbox, probe_same_ids_across_layers_checkbox],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                width='95%',
+                padding='0px 10px 0px 20px',
+            )
+        )
+        mask_checkboxes_box = VBox(
+            [probe_with_mask_checkbox, probe_same_ids_box],
+            layout=Layout(
+                justify_content='space-between',
+                align_items='flex-start',
+                width='95%'
+            )
+        )
+        selected_mask_id_numbox_label = Label(value="Selected mask ID:")
+        selected_mask_id_numbox = BoundedIntText(
+            value=0,
+            min=0,
+            max=1,
+            disabled=True,
+            layout=Layout(width='20%')
+        )
+        selected_mask_id_numbox.tag = "selected_mask_id"
+        selected_mask_ids_text = Text(
+            value=array2str([0], keep_brackets=True),
+            placeholder='(default)',
+            description='',
+            disabled=True,
+            layout=Layout(width='65%', display='none'))
+        selected_mask_ids_text.tag = "selected_mask_ids"
+        selected_mask_id_box = HBox(
+            [selected_mask_id_numbox_label, selected_mask_id_numbox, selected_mask_ids_text],
+            layout=Layout(
+                justify_content='flex-start',
+                width='95%',
+                padding='0px 10px 0px 20px'
+            )
+        )
+        selected_mask_id_box.tag = "selected_mask_id_box"
+        clear_all_selections_btn = Button(
+            description="Clear all selections",
+            icon='times',
+            tooltip='Clear all selected mask IDs',
+            disabled=True,
+            layout=Layout(height='24px', margin='2px 2px 2px 20px')
+        )
+        clear_all_selections_btn.tag = "clear_all_selections_btn"
+        probe_mask_settings_box = VBox(
+            [mask_checkboxes_box, selected_mask_id_box, clear_all_selections_btn],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                width='100%',
+            )
+        )
+
         probe_x_label = Label(value="Probe X:")
         probe_x_value = IntText(
             value=0, 
             disabled=True,
-            layout=Layout(width='90%')
+            layout=Layout(width='50%')
             )
         probe_x_value.tag = "probe_x"
-        probe_x_box = VBox(
+        probe_x_box = HBox(
             [probe_x_label, probe_x_value],
             layout=Layout(
-                justify_content='space-around', 
-                align_items='flex-start', 
-                flex_flow='column',
-                padding='5px'))
+                justify_content='flex-start', 
+                align_items='center', 
+                ))
         
         probe_y_label = Label(value="Probe Y:")
         probe_y_value = IntText(
             value=0, 
             disabled=True,
-            layout=Layout(width='90%')
+            layout=Layout(width='50%')
             )
         probe_y_value.tag = "probe_y"
-        probe_y_box = VBox(
+        probe_y_box = HBox(
             [probe_y_label, probe_y_value],
             layout=Layout(
-                justify_content='space-around', 
-                align_items='flex-start', 
-                flex_flow='column',
-                padding='5px'))
+                justify_content='flex-end', 
+                align_items='center', 
+                ))
         
         probe_xy_box = HBox(
             [probe_x_box, probe_y_box],
             layout=Layout(
-                justify_content='space-around', 
+                justify_content='flex-start', 
                 align_items='flex-start', 
-                flex_flow='row'))
+                width='100%',
+                padding='5px 0px 0px 0px',
+                ))
 
         self.box = Box(
-            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, probe_xy_box], 
+            [probe_w_box, probe_h_box, interaction_mode_box, probe_follows_idle_mouse_checkbox, filter_offsets_box, probe_mask_settings_box, probe_xy_box], 
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
@@ -826,7 +949,7 @@ class AudioSettings():
         self.box.tag = "audio_settings"
 
 
-class ImageSettings():
+class DisplaySettings():
     def __init__(self):
         self.create_ui()
 
@@ -863,7 +986,102 @@ class ImageSettings():
                 justify_content='space-around', 
                 align_items='flex-start', 
                 padding='5px'))
-        
+
+        # display_normalization_low_percentile_label = Label(value="Low Percentile:")
+        display_normalization_low_percentile_slider = FloatSlider(
+            value=0.0,
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            disabled=False,
+            description='Low Percentile:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        display_normalization_low_percentile_slider.tag = "display_normalization_low_percentile_slider"
+        display_normalization_low_percentile_text = Text(
+            value=array2str([0]),
+            placeholder='(default)',
+            description='Low Percentile:',
+            disabled=True,
+            layout=Layout(width='95%', display='none'),
+            style=dict(description_width='100px')
+        )
+        display_normalization_low_percentile_text.tag = "display_normalization_low_percentile_text"
+        display_normalization_low_percentile_box = HBox(
+            [display_normalization_low_percentile_slider, display_normalization_low_percentile_text],
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%',
+                # padding='0px 0px 0px 3px'
+            )
+        )
+        display_normalization_low_percentile_box.tag = "display_normalization_low_percentile_box"
+
+        # display_normalization_high_percentile_label = Label(value="High Percentile:")
+        display_normalization_high_percentile_slider = FloatSlider(
+            value=100.0,
+            min=0.0,
+            max=100.0,
+            step=0.1,
+            disabled=False,
+            description='High Percentile:',
+            orientation='horizontal',
+            layout=Layout(width='90%'),
+            style=dict(
+                description_width='100px')
+        )
+        display_normalization_high_percentile_slider.tag = "display_normalization_high_percentile_slider"
+        display_normalization_high_percentile_text = Text(
+            value=array2str([100]),
+            placeholder='(default)',
+            description='High Percentile:',
+            disabled=True,
+            layout=Layout(width='95%', display='none'),
+            style=dict(description_width='100px')
+        )
+        display_normalization_high_percentile_text.tag = "display_normalization_high_percentile_text"
+        display_normalization_high_percentile_box = HBox(
+            [display_normalization_high_percentile_slider, display_normalization_high_percentile_text],
+            layout=Layout(
+                justify_content='flex-start',
+                width='100%',
+            )
+        )
+        display_normalization_high_percentile_box.tag = "display_normalization_high_percentile_box"
+
+        display_normalization_percentile_settings_box = VBox(
+            [display_normalization_low_percentile_box, display_normalization_high_percentile_box],
+            layout=Layout(
+                justify_content='space-around',
+                align_items='flex-start',
+                width='100%',
+                # padding='0px 0px 0px 34px',
+            )
+        )
+        display_normalization_percentile_settings_box.tag = "display_normalization_percentile_settings_box"
+
+        maximum_displayed_channels_label = Label(value="Maximum displayed channels:")
+        maximum_displayed_channels_numbox = BoundedIntText(
+            value=3,
+            min=1,
+            max=3,
+            disabled=False,
+            layout=Layout(width='12%')
+        )
+        maximum_displayed_channels_numbox.tag = "maximum_displayed_channels"
+        maximum_displayed_channels_box = HBox(
+            [maximum_displayed_channels_label, maximum_displayed_channels_numbox],
+            layout=Layout(
+                justify_content='flex-start',
+                width='90%',
+                padding='14px'
+            )
+        )
+        maximum_displayed_channels_box.tag = "maximum_displayed_channels_box"
+
         channel_offset = IntSlider(
             value=0,
             min=0,
@@ -891,22 +1109,21 @@ class ImageSettings():
                 description_width='100px')
         )
         layer_offset.tag = "layer_offset"
-        
+
         self.box = VBox(
-            [normalize_box, channel_offset, layer_offset], 
+            [normalize_box, display_normalization_percentile_settings_box, maximum_displayed_channels_box, channel_offset, layer_offset],
             layout=Layout(
                 justify_content='space-around', 
                 align_items='flex-start', 
-                flex_flow='column',
                 ))
-        self.box.tag = "image_settings"
+        self.box.tag = "display_settings"
 
 
 class AppUI():
     def __init__(
             self,
             audio_settings,
-            image_settings,
+            display_settings,
             probe_settings, 
             canvas_width=500,
             canvas_height=500, 
@@ -914,12 +1131,12 @@ class AppUI():
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        self.create_ui(audio_settings, image_settings, probe_settings, canvas_height)
+        self.create_ui(audio_settings, display_settings, probe_settings, canvas_height)
 
     def __call__(self):
         return self.box
 
-    def create_ui(self, audio_settings, image_settings, probe_settings, canvas_height):
+    def create_ui(self, audio_settings, display_settings, probe_settings, canvas_height):
         features_carousel = VBox([], layout=Layout(overflow='scroll'))
         features_carousel.tag = "features_carousel"
         synths_carousel = VBox([], layout=Layout(overflow='scroll'))
@@ -942,7 +1159,7 @@ class AppUI():
         app_settings = Accordion(
             children=[
                 audio_settings(),
-                image_settings(),
+                display_settings(),
                 probe_settings(), 
                 features_carousel, 
                 synths_carousel, 
@@ -1038,6 +1255,184 @@ class ExponentPlot():
                 justify_content='center',
                 align_items='center',
                 width='auto',)
+        )
+
+
+class AudioIOSettingsCard():
+    def __init__(
+            self,
+            backend_names: List[str],
+            input_device_names: List[str],
+            output_device_names: List[str],
+            sample_rate_options: List[int],
+            buffer_size_options: List[int]
+    ):
+        # check that lists are not empty
+        if not backend_names:
+            raise ValueError("backend_names list is empty")
+        if not input_device_names:
+            raise ValueError("input_device_names list is empty")
+        if not output_device_names:
+            raise ValueError("output_device_names list is empty")
+        if not sample_rate_options:
+            raise ValueError("sample_rate_options list is empty")
+        if not buffer_size_options:
+            raise ValueError("buffer_size_options list is empty")
+
+        self.audio_io_settings = None
+
+        
+        self.create_ui(
+            backend_names=backend_names,
+            input_device_names=input_device_names,
+            output_device_names=output_device_names,
+            sample_rate_options=sample_rate_options,
+            buffer_size_options=buffer_size_options
+        )
+
+    def refresh_callback(self, b):
+        if self.audio_io_settings is not None:
+            self.audio_io_settings.refresh_devices()
+
+    def create_audio_graph_callback(self, b):
+        if self.audio_io_settings is not None:
+            self.audio_io_settings.create_audio_graph()
+
+    def __call__(self):
+        return self.box
+
+    def create_ui(
+            self,
+            backend_names: List[str],
+            input_device_names: List[str],
+            output_device_names: List[str],
+            sample_rate_options: List[int],
+            buffer_size_options: List[int]
+    ):
+        backend_dropdown_label = Label(value="Backend:")
+        backend_dropdown = Dropdown(
+            options=backend_names,
+            value=backend_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        backend_dropdown.tag = "backend_dropdown"
+        backend_dropdown_box = HBox([
+            backend_dropdown_label, backend_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        input_device_dropdown_label = Label(value="Input Device:")
+        input_device_dropdown = Dropdown(
+            options=input_device_names,
+            value=input_device_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        input_device_dropdown.tag = "input_device_dropdown"
+        input_device_dropdown_box = HBox([
+            input_device_dropdown_label, input_device_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        output_device_dropdown_label = Label(value="Output Device:")
+        output_device_dropdown = Dropdown(
+            options=output_device_names,
+            value=output_device_names[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        output_device_dropdown.tag = "output_device_dropdown"
+        output_device_dropdown_box = HBox([
+            output_device_dropdown_label, output_device_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        sample_rate_dropdown_label = Label(value="Sample Rate:")
+        sample_rate_dropdown = Dropdown(
+            options=sample_rate_options,
+            value=sample_rate_options[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        sample_rate_dropdown.tag = "sample_rate_dropdown"
+        sample_rate_dropdown_box = HBox([
+            sample_rate_dropdown_label, sample_rate_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        buffer_size_dropdown_label = Label(value="Buffer Size:")
+        buffer_size_dropdown = Dropdown(
+            options=buffer_size_options,
+            value=buffer_size_options[0],
+            description='',
+            layout=Layout(width='auto')
+        )
+        buffer_size_dropdown.tag = "buffer_size_dropdown"
+        buffer_size_dropdown_box = HBox([
+            buffer_size_dropdown_label, buffer_size_dropdown],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        refresh_button = Button(
+            description='Refresh Devices',
+            layout=Layout(width='150px')
+        )
+        refresh_button.tag = "refresh_button"
+        refresh_button.on_click(self.refresh_callback)
+
+        create_graph_button = Button(
+            description='Create Graph',
+            layout=Layout(width='150px')
+        )
+        create_graph_button.tag = "create_graph_button"
+        create_graph_button.on_click(self.create_audio_graph_callback)
+        buttons_box = HBox([
+            refresh_button, create_graph_button],
+            layout=Layout(
+                width='100%',
+                justify_content='space-between',
+                align_items='flex-start',
+                flex_flow='row',
+                padding='5px'))
+
+        self.box = Box([
+            backend_dropdown_box,
+            input_device_dropdown_box,
+            output_device_dropdown_box,
+            sample_rate_dropdown_box,
+            buffer_size_dropdown_box,
+            buttons_box
+        ],
+            layout=Layout(
+                width='100%',
+                max_width='360px',
+                justify_content='space-around',
+                align_items='flex-start',
+                flex_flow='column',
+                padding='5px',
+                border='2px solid gray'
+            )
         )
 
 

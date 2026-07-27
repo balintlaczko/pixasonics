@@ -9,6 +9,7 @@
 peaks/
 *.wav
 analyze_workshop_feedback.ipynb
+dev.ipynb
 *.maxpat
 
 # Byte-compiled / optimized / DLL files
@@ -90,6 +91,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+yeast.ipynb
 
 # IPython
 profile_default/

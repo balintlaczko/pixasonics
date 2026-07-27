@@ -2,6 +2,8 @@ import numpy as np
 import signalflow as sf
 from .ui import FeatureCard, find_widget_by_tag
 from .utils import array2str, filter_matrix
+import time
+import warnings
 
 
 class Feature():
@@ -25,6 +27,11 @@ class Feature():
         self._name = None
         self._app = None
         self._id = None
+        # Data attrs
+        self._features = sf.Buffer(1, 1) # default to 1 feature/channel
+        self._num_features = 1
+        self._min = np.ones_like(self._features.data) * 1e6
+        self._max = np.ones_like(self._features.data) * -1e6
         # Call setters
         self.filter_rows = filter_rows
         self.filter_columns = filter_columns
@@ -34,12 +41,13 @@ class Feature():
         self.reduce_method = reduce_method
         self.name = name
         self.id = str(id(self))
-        # Init public attrs
-        self.features = sf.Buffer(1, 1) # default to 1 feature/channel
-        self.min = np.ones_like(self.features.data) * 1e6
-        self.max = np.ones_like(self.features.data) * -1e6
         # Create the UI card
         self.create_ui()
+        # UI throttling and caching
+        self.ui_update_interval = 0.05  # seconds; tune as needed (e.g., 0.05–0.2)
+        self._last_ui_update = 0.0
+        self._pending_ui = False
+        self._pending_updates = {} # param_name -> pending new value (for UI update)
 
     @property
     def id(self):
@@ -105,7 +113,7 @@ class Feature():
     
     @target_dim.setter
     def target_dim(self, target_dim):
-        assert target_dim in [0, 1, 2, 3], "target_dim must be 0, 1, 2, or 3"
+        assert target_dim in [-1, 0, 1, 2, 3], "target_dim must be -1, 0, 1, 2, or 3"
         self._target_dim = target_dim
 
     @property
@@ -115,7 +123,8 @@ class Feature():
     @app.setter
     def app(self, app):
         self._app = app
-        self._process_image(app.bg_hires)
+        if app is not None:
+            self._process_image(app.image)
 
     @property
     def reduce_method(self):
@@ -127,29 +136,84 @@ class Feature():
             "Unknown reduce method string. Must be one of: mean, max, min, sum, std, var, median"
         self._reduce_method = reduce_method
 
-    @property 
-    def reduce(self):
-        """Get the reduction function based on reduce_method string"""
-        if self.reduce_method == "mean":
-            return np.mean
-        elif self.reduce_method == "max":
-            return np.max
-        elif self.reduce_method == "min":
-            return np.min
-        elif self.reduce_method == "sum":
-            return np.sum
-        elif self.reduce_method == "std":
-            return np.std
-        elif self.reduce_method == "var":
-            return np.var
-        elif self.reduce_method == "median":
-            return np.median
+    # @property 
+    # def reduce(self):
+    #     """Get the reduction function based on reduce_method string"""
+    #     if self.reduce_method == "mean":
+    #         return np.mean
+    #     elif self.reduce_method == "max":
+    #         return np.max
+    #     elif self.reduce_method == "min":
+    #         return np.min
+    #     elif self.reduce_method == "sum":
+    #         return np.sum
+    #     elif self.reduce_method == "std":
+    #         return np.std
+    #     elif self.reduce_method == "var":
+    #         return np.var
+    #     elif self.reduce_method == "median":
+    #         return np.median
         
     @property
     def reduce_axis(self):
         return tuple(i for i in range(4) if i != self.target_dim)
+    
+    @property
+    def features(self):
+        return self._features # sf.Buffer
+    
+    @features.setter
+    def features(self, features: np.ndarray):
+        # if masked turned into a normal array and fill masked values with zeros for comparison
+        if np.ma.is_masked(features):
+            features = features.filled(0)
+        changed = not np.allclose(self._features.data, features, rtol=1e-5, atol=1e-8)
+        if not changed:
+            return
+        self._features.data[:, :] = features
+        self._pending_ui = True
+        self._pending_updates['value'] = self._features.data
 
-    def __call__(self, mat):
+    @property
+    def num_features(self):
+        return self._num_features
+    
+    @num_features.setter
+    def num_features(self, num_features: int):
+        changed = (self._num_features != num_features)
+        if not changed:
+            return
+        self._num_features = num_features
+        self._pending_ui = True
+        self._pending_updates['num_features'] = num_features
+
+    @property
+    def min(self):
+        return self._min
+    
+    @min.setter
+    def min(self, min: np.ndarray):
+        changed = not np.array_equal(self._min, min)
+        if not changed:
+            return
+        self._min = min
+        self._pending_ui = True
+        self._pending_updates['min'] = min
+
+    @property
+    def max(self):
+        return self._max
+    
+    @max.setter
+    def max(self, max: np.ndarray):
+        changed = not np.array_equal(self._max, max)
+        if not changed:
+            return
+        self._max = max
+        self._pending_ui = True
+        self._pending_updates['max'] = max
+
+    def __call__(self, mat: np.ndarray):
         mat_filtered = filter_matrix(
             mat,
             self.filter_rows,
@@ -163,17 +227,78 @@ class Feature():
         if computed.shape[0] != self.num_features:
             # self.initialize(mat_filtered)
             self.initialize(computed) # TODO: this means it will always take the local minmax
-        self.features.data[:, :] = computed[..., None] # add the sample dimension, so it is (num_features, 1)
-
+        self.features = computed[..., None] # add the sample dimension, so it is (num_features, 1)
         self.update_minmax() # then we have to keep a running minmax
-        self.update_ui()
+        self._pending_ui = True # and mark the UI as needing an update
+
+        # Ask the App to schedule a debounced UI flush on the UI thread
+        if getattr(self, "app", None) is not None:
+            try:
+                self.app.schedule_ui_flush()  # ~50ms debounce by default
+            except Exception:
+                pass
     
     def compute(self, mat):
         """Compute the feature from the matrix, override this method for custom computation.
         The custom computation should return a 1D array of shape (num_features,)
         """
-        return self.reduce(mat, axis=self.reduce_axis)
-    
+        if self.target_dim == -1:
+            return self.reduce(mat, self._reduce_method, self.reduce_axis)[..., None] # add the sample dimension, so it is (num_features, 1)
+        return self.reduce(mat, self._reduce_method, self.reduce_axis)
+
+    def reduce(self, mat, method, axis=None):
+        """
+        Reduces a submatrix along specified axes handling both standard 
+        and masked arrays, dynamically adapting to the underlying dtype.
+        """
+        valid_methods = {'mean', 'min', 'max', 'median', 'std', 'var', 'sum'}
+        if method not in valid_methods:
+            raise ValueError(f"Method '{method}' must be one of {valid_methods}")
+
+        # 1. Fast path: Standard arrays or MaskedArrays with no masked elements
+        is_masked = np.ma.isMaskedArray(mat)
+        if not is_masked or mat.mask is np.ma.nomask:
+            if method == 'median':
+                return np.median(mat, axis=axis)
+            return getattr(np, method)(mat, axis=axis)
+
+        # 2. Masked array handling
+        data = mat.data
+        mask = mat.mask
+
+        # min/max/sum: Bypass np.ma overhead using np.where substitution
+        if method in {'min', 'max'}:
+            is_int = np.issubdtype(data.dtype, np.integer)
+            is_float = np.issubdtype(data.dtype, np.floating)
+            
+            if not (is_int or is_float):
+                raise TypeError(f"Unsupported dtype: {data.dtype}")
+
+            if method == 'min':
+                fill_val = np.iinfo(data.dtype).max if is_int else np.inf
+                return np.min(np.where(mask, fill_val, data), axis=axis)
+                
+            elif method == 'max':
+                fill_val = np.iinfo(data.dtype).min if is_int else -np.inf
+                return np.max(np.where(mask, fill_val, data), axis=axis)
+
+        elif method == 'sum':
+            # 0 is the identity for addition, perfectly fitting any numeric dtype
+            return np.sum(np.where(mask, 0, data), axis=axis)
+
+        # 3. Complex metrics (mean, std, var, median): Delegate to np.ma
+        else:
+            # Patch the fill_value in-place to prevent internal TypeErrors for integer arrays
+            if np.issubdtype(data.dtype, np.integer):
+                mat.set_fill_value(0)
+                
+            func = getattr(np.ma, method)
+            
+            # Suppress RuntimeWarnings for operations on entirely masked slices 
+            # (e.g., calculating the mean of an array containing only masked pixels)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                return func(mat, axis=axis)
     
     def process_image(self, mat):
         """Override this method for custom processing of the App's whole image, called upon attachment to the App.
@@ -202,7 +327,7 @@ class Feature():
         mat_processed = self.process_image(mat_filtered)
         
         self.initialize(mat_processed)
-        self.update_ui()
+        self.update_ui() # force immediate UI update
 
 
     def initialize(self, mat):
@@ -214,7 +339,7 @@ class Feature():
             self.min = np.min(mat)[..., None]
             self.max = np.max(mat)[..., None]
             self.num_features = mat.shape[0]
-        self.features = sf.Buffer(self.num_features, 1)
+        self._features = sf.Buffer(self.num_features, 1)
 
         
     def create_ui(self):
@@ -243,10 +368,35 @@ class Feature():
         self.max = np.maximum(self.max, self.features.data)
 
     def update_ui(self):
-        self._ui_min.value = array2str(self.min)
-        self._ui_max.value = array2str(self.max)
-        self._ui_value.value = array2str(self.features.data)
-        self._ui_num_features.value = str(self.num_features)
+        # Force an immediate UI flush (used where you really want it synchronous)
+        self.update_ui_throttled(force=True)
+
+    def update_ui_throttled(self, force: bool = False):
+        # If UI not created or we’re headless, skip
+        if not hasattr(self, "_ui_min") or self._ui_min is None:
+            return
+
+        now = time.perf_counter()
+        if not force:
+            if not self._pending_ui:
+                return
+            if (now - self._last_ui_update) < self.ui_update_interval:
+                return
+            
+        # Push cached values to widgets
+        for key, value in self._pending_updates.items():
+            if key == "min":
+                self._ui_min.value = array2str(value)
+            elif key == "max":
+                self._ui_max.value = array2str(value)
+            elif key == "value":
+                self._ui_value.value = array2str(value)
+            elif key == "num_features":
+                self._ui_num_features.value = int(value) # IntText expects int
+        
+        self._pending_ui = False
+        self._pending_updates = {}
+        self._last_ui_update = now
 
     def update(self):
         self.update_minmax()
