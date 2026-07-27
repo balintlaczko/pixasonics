@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
     to_change = "pixasonics/figures/interface_screenshot_2.png"
-    change_to = "https://raw.githubusercontent.com/balintlaczko/pixasonics/main/pixasonics/figures/interface_screenshot_2.png"
+    change_to = "https://raw.githubusercontent.com/balintlaczko/pixasonics/main/pixasonics/figures/interface_screenshot_4.png"
     long_description = long_description.replace(to_change, change_to)
 
 setup(
