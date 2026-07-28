@@ -189,7 +189,11 @@ class Synth():
             if slider is not None:
                 if self.num_channels == 1:
                     slider.unobserve_all()
-                    slider_value = value if self.num_channels == 1 else array2str(value)
+                    if self.num_channels == 1:
+                        slider_value = float(value) if isinstance(value, (int, float)) else float(value.item())
+                    else:
+                        slider_value = array2str(value)
+                    # slider_value = value if self.num_channels == 1 else array2str(value)
                     # self.debouncer.submit(name, lambda: self.update_slider(slider, slider_value))
                     self.update_slider(slider, slider_value)
                 elif self.num_channels > 1:
