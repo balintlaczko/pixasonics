@@ -38,18 +38,19 @@ class AudioIOSettings(): # singleton
         self.card = None
 
         # create safe defaults for all three platforms (Mac, Windows, Linux) for the most common audio interfaces
+        # these will assume English system language---fall back to the first available device if the expected device is not found
         if platform.system() == "Darwin":
-            self._backend = "coreaudio"
-            self._input_device = "MacBook Pro Microphone"
-            self._output_device = "MacBook Pro Speakers"
+            self._backend = "coreaudio" if "coreaudio" in self.backend_names else self.backend_names[0]
+            self._input_device = "MacBook Pro Microphone" if "MacBook Pro Microphone" in self.input_device_names else self.input_device_names[0]
+            self._output_device = "MacBook Pro Speakers" if "MacBook Pro Speakers" in self.output_device_names else self.output_device_names[0]
         elif platform.system() == "Windows":
-            self._backend = "wasapi"
-            self._input_device = "Microphone (Realtek(R) Audio)"
-            self._output_device = "Speakers (Realtek(R) Audio)"
+            self._backend = "wasapi" if "wasapi" in self.backend_names else self.backend_names[0]
+            self._input_device = "Microphone (Realtek(R) Audio)" if "Microphone (Realtek(R) Audio)" in self.input_device_names else self.input_device_names[0]
+            self._output_device = "Speakers (Realtek(R) Audio)" if "Speakers (Realtek(R) Audio)" in self.output_device_names else self.output_device_names[0]
         elif platform.system() == "Linux":
-            self._backend = "alsa"
-            self._input_device = "default"
-            self._output_device = "default"
+            self._backend = "alsa" if "alsa" in self.backend_names else self.backend_names[0]
+            self._input_device = "default" if "default" in self.input_device_names else self.input_device_names[0]
+            self._output_device = "default" if "default" in self.output_device_names else self.output_device_names[0]
         else:
             raise ValueError(f"Unsupported platform: {platform.system()}")
 
@@ -211,19 +212,19 @@ class AudioIOSettings(): # singleton
         self._backend.bind_widget(backend_dropdown, extra_callback=self._set_create_graph_button_warning)
 
         input_device_dropdown = find_widget_by_tag(self.ui, "input_device_dropdown")
-        input_device_dropdown.value = self._input_device.value
+        input_device_dropdown.value = self._input_device.value if self._input_device.value in self.input_device_names else self.input_device_names[0]
         self._input_device.bind_widget(input_device_dropdown, extra_callback=self._set_create_graph_button_warning)
 
         output_device_dropdown = find_widget_by_tag(self.ui, "output_device_dropdown")
-        output_device_dropdown.value = self._output_device.value
+        output_device_dropdown.value = self._output_device.value if self._output_device.value in self.output_device_names else self.output_device_names[0]
         self._output_device.bind_widget(output_device_dropdown, extra_callback=self._set_create_graph_button_warning)
 
         sample_rate_dropdown = find_widget_by_tag(self.ui, "sample_rate_dropdown")
-        sample_rate_dropdown.value = self._sample_rate.value
+        sample_rate_dropdown.value = self._sample_rate.value if self._sample_rate.value in self.sample_rate_options else self.sample_rate_options[0]
         self._sample_rate.bind_widget(sample_rate_dropdown, extra_callback=self._set_create_graph_button_warning)
 
         buffer_size_dropdown = find_widget_by_tag(self.ui, "buffer_size_dropdown")
-        buffer_size_dropdown.value = self._buffer_size.value
+        buffer_size_dropdown.value = self._buffer_size.value if self._buffer_size.value in self.buffer_size_options else self.buffer_size_options[0]
         self._buffer_size.bind_widget(buffer_size_dropdown, extra_callback=self._set_create_graph_button_warning)
 
 
