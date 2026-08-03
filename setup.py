@@ -3,13 +3,13 @@ from setuptools import setup, find_packages
 # Read the README file
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
-    to_change = "pixasonics/figures/interface_screenshot_2.png"
-    change_to = "https://raw.githubusercontent.com/balintlaczko/pixasonics/main/pixasonics/figures/interface_screenshot_2.png"
+    to_change = "pixasonics/figures/interface_screenshot_4.png"
+    change_to = "https://raw.githubusercontent.com/balintlaczko/pixasonics/main/pixasonics/figures/interface_screenshot_4.png"
     long_description = long_description.replace(to_change, change_to)
 
 setup(
     name='pixasonics',
-    version='0.1.6',
+    version='0.1.7.1',
     author='Balint Laczko',
     author_email='balint.laczko@imv.uio.no',
     description='An Image Sonification Toolbox',
@@ -35,11 +35,12 @@ setup(
         "numpy",
         "numba",
         "pillow",
-        "signalflow==0.5.0",
+        "signalflow>=0.5.0,<0.5.3",
         "ipython",
         "jupyter",
         "ipycanvas",
         "ipywidgets",
+        "notebook>=7.3.0,<7.4.0" # TODO: fix performance issues with notebook 7.4.0 and above
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
